@@ -3,6 +3,7 @@
 require './openlitespeed-lib.pl';
 
 &ui_print_header(undef, 'OpenLiteSpeed', '');
+&ReadParse();
 
 my $conf = "$config{'lsws'}/conf/httpd_config.conf";
 my @vhosts;
@@ -26,47 +27,67 @@ sub get_value {
     return '';
 }
 
+# Keep the dashboard lightweight: show at most 20 domains per page.
+my $per_page = 20;
+my $page = $in{'page'} || 1;
+$page =~ s/\D//g;
+$page = 1 if !$page || $page < 1;
+
+my $total = scalar @vhosts;
+my $pages = $total ? int(($total + $per_page - 1) / $per_page) : 1;
+$page = $pages if $page > $pages;
+
+my $start = ($page - 1) * $per_page;
+my $end = $start + $per_page - 1;
+$end = $total - 1 if $end >= $total;
+
 print <<'HTML';
 <style>
-.ols-wrap { margin:0 auto; max-width:1200px; }
-.ols-hero { padding:24px 28px; margin:0 0 22px; border-radius:12px; background:linear-gradient(135deg,#18243a,#253b5d); color:#fff; box-shadow:0 8px 24px rgba(0,0,0,.12); }
-.ols-hero h1 { margin:0 0 6px; font-size:28px; }
-.ols-hero p { margin:0; opacity:.82; font-size:14px; }
-.ols-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:18px; }
-.ols-card { border:1px solid #dfe3e8; border-radius:12px; background:#fff; overflow:hidden; box-shadow:0 3px 12px rgba(0,0,0,.06); }
-.ols-card-head { padding:18px 20px; border-bottom:1px solid #edf0f3; display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.ols-domain { font-size:18px; font-weight:700; }
-.ols-status { font-size:12px; padding:4px 9px; border-radius:20px; background:#e8f7ee; color:#18794e; font-weight:700; }
-.ols-status.off { background:#f1f3f5; color:#777; }
-.ols-body { padding:16px 20px; }
-.ols-root { color:#697386; font-size:12px; margin-bottom:16px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.ols-actions { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
-.ols-action { display:block; text-align:center; padding:10px 6px; border:1px solid #e1e5ea; border-radius:8px; text-decoration:none; color:#26364a; background:#fafbfc; font-size:12px; font-weight:600; }
-.ols-action:hover { background:#f0f4f8; text-decoration:none; }
-.ols-meta { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; }
-.ols-pill { font-size:11px; padding:4px 8px; border-radius:5px; background:#f3f5f7; color:#596579; }
-.ols-pill.ok { background:#eaf7ef; color:#18794e; }
-.ols-server { margin-top:26px; display:flex; flex-wrap:wrap; gap:10px; }
-.ols-server a { display:inline-block; padding:11px 16px; border:1px solid #dfe3e8; border-radius:8px; background:#fff; text-decoration:none; font-weight:600; }
-@media(max-width:600px){ .ols-grid{grid-template-columns:1fr}.ols-actions{grid-template-columns:repeat(2,1fr)} }
+/* Use Webmin's inherited theme variables where available. Do not force a light theme. */
+.ols-wrap { max-width:1200px; margin:0 auto; }
+.ols-hero { padding:22px 24px; margin:0 0 20px; border-radius:10px; border:1px solid var(--border-color, rgba(128,128,128,.25)); background:var(--body-bg, transparent); }
+.ols-hero h1 { margin:0 0 5px; font-size:26px; }
+.ols-hero p { margin:0; opacity:.72; font-size:13px; }
+.ols-list { border:1px solid var(--border-color, rgba(128,128,128,.25)); border-radius:10px; overflow:hidden; background:var(--body-bg, transparent); }
+.ols-row { display:grid; grid-template-columns:minmax(260px,2fr) minmax(150px,1fr) 110px 150px; align-items:center; gap:16px; padding:13px 16px; border-bottom:1px solid var(--border-color, rgba(128,128,128,.18)); }
+.ols-row:last-child { border-bottom:0; }
+.ols-head { font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; opacity:.68; background:var(--table-header-bg, rgba(128,128,128,.08)); }
+.ols-domain { font-weight:700; }
+.ols-root { font-size:12px; opacity:.68; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ols-status { display:inline-block; width:max-content; padding:3px 8px; border-radius:999px; font-size:10px; font-weight:700; background:rgba(40,167,69,.14); color:#43b56b; }
+.ols-status.off { background:rgba(128,128,128,.14); color:inherit; opacity:.65; }
+.ols-meta { font-size:11px; opacity:.72; }
+.ols-manage { text-align:right; }
+.ols-manage a { text-decoration:none; font-weight:600; }
+.ols-pagination { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:16px; }
+.ols-pages { display:flex; gap:5px; flex-wrap:wrap; }
+.ols-page { display:inline-block; min-width:30px; padding:6px 9px; text-align:center; border:1px solid var(--border-color, rgba(128,128,128,.25)); border-radius:6px; text-decoration:none; }
+.ols-page.current { font-weight:700; background:rgba(128,128,128,.12); }
+.ols-server { display:flex; gap:10px; margin-top:22px; flex-wrap:wrap; }
+.ols-server a { display:inline-block; padding:8px 13px; border:1px solid var(--border-color, rgba(128,128,128,.25)); border-radius:7px; text-decoration:none; }
+.ols-empty { padding:24px; opacity:.72; }
+@media(max-width:800px){ .ols-row { grid-template-columns:1fr 1fr; } .ols-head { display:none; } .ols-manage { text-align:left; } }
 </style>
 HTML
 
 print "<div class='ols-wrap'>";
 print "<div class='ols-hero'>";
 print "<h1>OpenLiteSpeed</h1>";
-print "<p>Manage your websites, configurations, SSL, PHP and domain logs from one place.</p>";
+print "<p>Websites, domain configuration, SSL, PHP and logs.</p>";
 print "</div>";
 
 print "<h2>Websites</h2>";
+print "<div class='ols-list'>";
+print "<div class='ols-row ols-head'>";
+print "<div>Domain</div><div>Document Root</div><div>Status</div><div>Action</div>";
+print "</div>";
 
-if (!@vhosts) {
-    print "<div class='error'>No virtual hosts were found in <code>" . &html_escape($conf) . "</code>.</div>";
+if (!$total) {
+    print "<div class='ols-empty'>No virtual hosts were found in <code>" . &html_escape($conf) . "</code>.</div>";
 }
 else {
-    print "<div class='ols-grid'>";
-
-    foreach my $vh (@vhosts) {
+    for (my $i = $start; $i <= $end; $i++) {
+        my $vh = $vhosts[$i];
         my $root = "$config{'lsws'}/domains/$vh";
         my $vhconf = "$root/conf/vhconf.conf";
         my $conf_exists = -f $vhconf;
@@ -83,45 +104,57 @@ else {
             $rewrite = 1 if $content =~ /^\s*rewrite\s*\{/m;
         }
 
-        print "<div class='ols-card'>";
-        print "<div class='ols-card-head'>";
-        print "<span class='ols-domain'>" . &html_escape($domain || $vh) . "</span>";
-        print $conf_exists ? "<span class='ols-status'>READY</span>" : "<span class='ols-status off'>NOT CONFIGURED</span>";
-        print "</div>";
-        print "<div class='ols-body'>";
+        print "<div class='ols-row'>";
+        print "<div><div class='ols-domain'>" . &html_escape($domain || $vh) . "</div>";
+        print "<div class='ols-meta'>" . &html_escape($vh) . "</div></div>";
         print "<div class='ols-root'>" . &html_escape($docroot || 'No document root configured') . "</div>";
-
+        print "<div>";
+        print $conf_exists ? "<span class='ols-status'>READY</span>" : "<span class='ols-status off'>NOT CONFIGURED</span>";
+        print "<div class='ols-meta'>";
         if ($conf_exists) {
-            print "<div class='ols-actions'>";
-            print "<a class='ols-action' href='config.cgi?vh=" . &urlize($vh) . "'>⚙ Configuration</a>";
-            print "<a class='ols-action' href='config.cgi?vh=" . &urlize($vh) . "#logs'>▣ Logs</a>";
-            print "<a class='ols-action' href='config.cgi?vh=" . &urlize($vh) . "#ssl'>🔒 SSL</a>";
-            print "<a class='ols-action' href='config.cgi?vh=" . &urlize($vh) . "#php'>PHP</a>";
-            print "<a class='ols-action' href='config.cgi?vh=" . &urlize($vh) . "#rewrite'>↗ Rewrite</a>";
-            print "<a class='ols-action' href='config.cgi?vh=" . &urlize($vh) . "'>Manage →</a>";
-            print "</div>";
-            print "<div class='ols-meta'>";
-            my $ssl_class = $ssl ? ' ok' : '';
-            my $rewrite_class = $rewrite ? ' ok' : '';
-            print "<span class='ols-pill ok'>PHP " . &html_escape($php || 'Configured') . "</span>";
-            print "<span class='ols-pill$ssl_class'>SSL " . ($ssl ? 'Enabled' : 'Disabled') . "</span>";
-            print "<span class='ols-pill$rewrite_class'>Rewrite " . ($rewrite ? 'Enabled' : 'Disabled') . "</span>";
-            print "</div>";
+            print "SSL " . ($ssl ? 'on' : 'off') . " · Rewrite " . ($rewrite ? 'on' : 'off');
+        }
+        print "</div></div>";
+        print "<div class='ols-manage'>";
+        if ($conf_exists) {
+            print "<a href='config.cgi?vh=" . &urlize($vh) . "'>Manage →</a>";
         }
         else {
-            print "<div class='ols-actions'><span class='ols-action'>Configuration unavailable</span></div>";
+            print "<span class='ols-meta'>Unavailable</span>";
         }
-
-        print "</div></div>";
+        print "</div>";
+        print "</div>";
     }
-
-    print "</div>";
 }
 
-print "<h2 style='margin-top:30px'>Server</h2>";
+print "</div>";
+
+if ($total > $per_page) {
+    print "<div class='ols-pagination'>";
+    print "<div class='ols-meta'>Showing " . ($start + 1) . "–" . ($end + 1) . " of $total domains</div>";
+    print "<div class='ols-pages'>";
+
+    if ($page > 1) {
+        print "<a class='ols-page' href='index.cgi?page=" . ($page - 1) . "'>‹</a>";
+    }
+
+    for (my $p = 1; $p <= $pages; $p++) {
+        # Keep very large installations compact while always showing the first,
+        # last, current and neighbouring pages.
+        next if $pages > 8 && $p != 1 && $p != $pages && abs($p - $page) > 1;
+        print "<a class='ols-page" . ($p == $page ? ' current' : '') . "' href='index.cgi?page=$p'>$p</a>";
+    }
+
+    if ($page < $pages) {
+        print "<a class='ols-page' href='index.cgi?page=" . ($page + 1) . "'>›</a>";
+    }
+
+    print "</div></div>";
+}
+
 print "<div class='ols-server'>";
-print "<a href='listeners.cgi'>⚡ Listeners</a>";
-print "<a href='service.cgi?action=restart'>↻ Restart OpenLiteSpeed</a>";
+print "<a href='listeners.cgi'>Listeners</a>";
+print "<a href='service.cgi?action=restart'>Restart OpenLiteSpeed</a>";
 print "</div>";
 print "</div>";
 
