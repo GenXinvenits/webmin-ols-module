@@ -1,0 +1,5 @@
+category=servers
+desc=OpenLiteSpeed Web Server
+name=OpenLiteSpeed
+longdesc=Manage OpenLiteSpeed web server, virtual hosts, listeners, configuration and logs.
+version=1.0
