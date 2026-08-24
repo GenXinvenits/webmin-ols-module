@@ -38,6 +38,24 @@ context /cgi-bin/ {
   type                          cgi
 }
 
+context /fm/ {
+  location                      $SERVER_ROOT/Example/filegator/dist/
+  allowBrowse                   1
+  rewrite {
+    enable                      1
+  }
+  addDefaultCharset             off
+}
+
+context /phpmyadmin/ {
+  location                      $SERVER_ROOT/Example/phpmyadmin/
+  allowBrowse                   1
+  rewrite {
+    enable                      1
+  }
+  addDefaultCharset             off
+}
+
 context /.well-known/acme-challenge {
   location                      $VH_ROOT/public_html/.well-known/acme-challenge
   allowBrowse                   0
@@ -50,6 +68,7 @@ context /.well-known/acme-challenge {
 context / {
   allowBrowse                   1
   addDefaultCharset             off
+  extraHeaders                  Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
   extraHeaders                  X-Content-Type-Options "nosniff"
   extraHeaders                  X-Frame-Options "SAMEORIGIN"
   extraHeaders                  Referrer-Policy "strict-origin-when-cross-origin"
@@ -59,6 +78,20 @@ context / {
 rewrite {
   enable                        1
   autoLoadHtaccess              1
+}
+
+__SSL_CONFIG__
+
+module cache {
+  storagePath                   $VH_ROOT/cachedata/
+  checkPrivateCache             1
+  checkPublicCache              1
+  qsCache                       1
+  enableCache                   1
+  expireInSeconds               3600
+  enablePrivateCache            1
+  privateExpireInSeconds        1800
+  ls_enabled                    1
 }
 
 accessControl {
