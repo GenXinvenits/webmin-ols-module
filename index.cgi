@@ -54,12 +54,27 @@ my $start = ($page - 1) * $per_page;
 my $end = $start + $per_page - 1;
 $end = $total - 1 if $end >= $total;
 
+my $status = &service_status();
+my $version = &ols_version();
+my $running = &ols_running();
+
 print <<'HTML';
 <style>
 .ols-wrap { max-width:1200px; margin:0 auto; }
 .ols-hero { padding:22px 24px; margin:0 0 20px; border-radius:10px; border:1px solid var(--border-color, rgba(128,128,128,.25)); background:var(--body-bg, transparent); }
+.ols-hero-top { display:flex; align-items:flex-start; justify-content:space-between; gap:24px; }
 .ols-hero h1 { margin:0 0 5px; font-size:26px; }
 .ols-hero p { margin:0; opacity:.72; font-size:13px; }
+.ols-details { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-top:20px; }
+.ols-detail { padding:10px 12px; border:1px solid var(--border-color, rgba(128,128,128,.18)); border-radius:7px; }
+.ols-detail-label { font-size:10px; text-transform:uppercase; letter-spacing:.05em; opacity:.58; margin-bottom:3px; }
+.ols-detail-value { font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ols-controls { display:flex; gap:7px; flex-wrap:wrap; margin-top:18px; }
+.ols-control { display:inline-block; padding:7px 12px; border:1px solid var(--border-color, rgba(128,128,128,.25)); border-radius:6px; text-decoration:none; font-size:12px; font-weight:600; }
+.ols-control.primary { background:rgba(40,167,69,.12); }
+.ols-control.danger { background:rgba(220,53,69,.10); }
+.ols-status-running { color:#43b56b; }
+.ols-status-stopped { color:#d9534f; }
 .ols-list { border:1px solid var(--border-color, rgba(128,128,128,.25)); border-radius:10px; overflow:hidden; background:var(--body-bg, transparent); }
 .ols-row { display:grid; grid-template-columns:minmax(220px,1fr) minmax(420px,2.4fr) 150px 100px; align-items:center; gap:16px; padding:13px 16px; border-bottom:1px solid var(--border-color, rgba(128,128,128,.18)); }
 .ols-row:last-child { border-bottom:0; }
@@ -79,14 +94,41 @@ print <<'HTML';
 .ols-server { display:flex; gap:10px; margin-top:22px; flex-wrap:wrap; }
 .ols-server a { display:inline-block; padding:8px 13px; border:1px solid var(--border-color, rgba(128,128,128,.25)); border-radius:7px; text-decoration:none; }
 .ols-empty { padding:24px; opacity:.72; }
-@media(max-width:800px){ .ols-row { grid-template-columns:1fr 1fr; } .ols-head { display:none; } .ols-manage { text-align:left; } }
+@media(max-width:800px){ .ols-hero-top { flex-direction:column; } .ols-details { grid-template-columns:1fr 1fr; } .ols-row { grid-template-columns:1fr 1fr; } .ols-head { display:none; } .ols-manage { text-align:left; } }
 </style>
 HTML
 
 print "<div class='ols-wrap'>";
+
 print "<div class='ols-hero'>";
+print "<div class='ols-hero-top'>";
+print "<div>";
 print "<h1>OpenLiteSpeed</h1>";
-print "<p>Websites, domain configuration, SSL, PHP and logs.</p>";
+print "<p>Server status, version, configuration and service controls.</p>";
+print "</div>";
+print "<div class='ols-meta'>";
+if ($running) {
+    print "<span class='ols-status-running'><b>● Running</b></span>";
+}
+else {
+    print "<span class='ols-status-stopped'><b>● Stopped</b></span>";
+}
+print "</div>";
+print "</div>";
+
+print "<div class='ols-details'>";
+print "<div class='ols-detail'><div class='ols-detail-label'>Status</div><div class='ols-detail-value'>$status</div></div>";
+print "<div class='ols-detail'><div class='ols-detail-label'>Version</div><div class='ols-detail-value'>" . &html_escape($version) . "</div></div>";
+print "<div class='ols-detail'><div class='ols-detail-label'>Installation</div><div class='ols-detail-value'>" . &html_escape($config{'lsws'}) . "</div></div>";
+print "<div class='ols-detail'><div class='ols-detail-label'>Configuration</div><div class='ols-detail-value'>" . &html_escape($config{'config'}) . "</div></div>";
+print "</div>";
+
+print "<div class='ols-controls'>";
+print "<a class='ols-control primary' href='service.cgi?action=start'>Start</a>";
+print "<a class='ols-control danger' href='service.cgi?action=stop'>Stop</a>";
+print "<a class='ols-control' href='service.cgi?action=restart'>Restart</a>";
+print "<a class='ols-control' href='listeners.cgi'>Listeners</a>";
+print "</div>";
 print "</div>";
 
 print "<h2>Websites</h2>";
@@ -121,9 +163,6 @@ else {
         $domain = $vh unless $domain;
         $docroot = "$root/public_html" unless $docroot;
 
-        # Show actual aliases/subdomains below the primary domain instead of
-        # repeating the virtual-host name. Multiple aliases are displayed as
-        # a comma-separated list, with LiteSpeed variables resolved.
         my @subdomains;
         if ($aliases) {
             @subdomains = split(/\s+/, $aliases);
@@ -181,7 +220,6 @@ if ($total > $per_page) {
 
 print "<div class='ols-server'>";
 print "<a href='listeners.cgi'>Listeners</a>";
-print "<a href='service.cgi?action=restart'>Restart OpenLiteSpeed</a>";
 print "</div>";
 print "</div>";
 
