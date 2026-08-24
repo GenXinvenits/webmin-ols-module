@@ -5,6 +5,16 @@ require './openlitespeed-lib.pl';
 
 my $action = $in{'action'} || '';
 
+sub plain_status {
+    my ($html) = @_;
+    $html = '' unless defined $html;
+    $html =~ s/<[^>]+>//g;
+    $html =~ s/&nbsp;/ /g;
+    $html =~ s/\s+/ /g;
+    $html =~ s/^\s+|\s+$//g;
+    return $html || 'Unknown';
+}
+
 if ($action !~ /^(start|stop|restart)$/) {
     &ui_print_header(undef, 'OpenLiteSpeed Service', '');
     print <<'HTML';
@@ -20,8 +30,8 @@ my $label = $labels->{$action};
 my $cmd = "/usr/bin/systemctl $action " . quotemeta($config{'service'}) . " 2>&1";
 my $output = &backquote_command($cmd);
 my $exit = $? >> 8;
-my $status = &service_status();
-my $running = &ols_running();
+my $status_html = &service_status();
+my $status = plain_status($status_html);
 my $ok = ($exit == 0);
 
 &ui_print_header(undef, "OpenLiteSpeed $label", '');
