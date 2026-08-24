@@ -1,0 +1,66 @@
+docRoot                         $VH_ROOT/public_html
+vhDomain                        $VH_NAME
+__VH_ALIASES_LINE__adminEmails                     admin@$VH_NAME
+
+enableGzip                      1
+enableIpGeo                     0
+enableBr                        1
+
+gzipCompressLevel               4
+gzipMinFileSize                  300
+gzipMaxFileSize                  5242880
+
+errorlog $VH_ROOT/logs/error.log {
+  useServer                     0
+  logLevel                      ERROR
+  rollingSize                   5M
+}
+
+accesslog $VH_ROOT/logs/access.log {
+  useServer                     0
+  logFormat                     "%h %>s %b"
+  logHeaders                    0
+  rollingSize                   2M
+  keepDays                      1
+  compressArchive               1
+}
+
+index {
+  useServer                     0
+  indexFiles                    index.php, index.html
+}
+
+__PHP_CONFIG__
+
+context /cgi-bin/ {
+  allowBrowse                   1
+  location                      $VH_ROOT/cgi-bin/
+  type                          cgi
+}
+
+context /.well-known/acme-challenge {
+  location                      $VH_ROOT/public_html/.well-known/acme-challenge
+  allowBrowse                   0
+  rewrite {
+    enable                      0
+  }
+  addDefaultCharset             off
+}
+
+context / {
+  allowBrowse                   1
+  addDefaultCharset             off
+  extraHeaders                  X-Content-Type-Options "nosniff"
+  extraHeaders                  X-Frame-Options "SAMEORIGIN"
+  extraHeaders                  Referrer-Policy "strict-origin-when-cross-origin"
+  extraHeaders                  Permissions-Policy "geolocation=(), microphone=(), camera=()"
+}
+
+rewrite {
+  enable                        1
+  autoLoadHtaccess              1
+}
+
+accessControl {
+  allow *
+}
