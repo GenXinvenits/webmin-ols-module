@@ -94,8 +94,6 @@ my $php_path = ($content =~ /^\s*path\s+(\S+)\s*$/m) ? $1 : '';
 my $php_user = ($content =~ /^\s*extUser\s+(\S+)\s*$/m) ? $1 : '';
 my $php_group = ($content =~ /^\s*extGroup\s+(\S+)\s*$/m) ? $1 : '';
 
-# Detect PHP version from the LiteSpeed PHP processor directory.
-# Examples: lsphp83 -> PHP 8.3, lsphp74 -> PHP 7.4, lsphp56 -> PHP 5.6.
 my $php_version = '';
 if ($php_path =~ m{(?:^|/)lsphp(\d)(\d)(?:/|$)}) {
     $php_version = "$1.$2";
@@ -128,7 +126,8 @@ print <<'HTML';
     activate(valid.indexOf(hash)>=0?hash:'overview',false);
   }
   window.olsShowTab=function(name){ activate(name,true); };
-  document.addEventListener('DOMContentLoaded',initial);
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded',initial);
+  else initial();
   window.addEventListener('hashchange',function(){ initial(); });
 })();
 </script>
@@ -139,11 +138,11 @@ print "<div class='ols-hero'><span class='ols-kicker'>Virtual host</span><h1>".&
 if ($message && !$error) { print "<div class='ols-message ols-success'>".&html_escape($message)."</div>"; }
 if ($error) { print "<div class='ols-message ols-error'><b>".&html_escape($error)."</b>"; print "<pre>".&html_escape($message)."</pre>" if $message; print "</div>"; }
 
-print "<nav class='ols-tabs'><button type='button' class='ols-tab' data-tab='overview' onclick=\"olsShowTab('overview')\">Overview</button><button type='button' class='ols-tab' data-tab='php' onclick=\"olsShowTab('php')\">PHP</button><button type='button' class='ols-tab' data-tab='ssl' onclick=\"olsShowTab('ssl')\">SSL</button><button type='button' class='ols-tab' data-tab='rewrite' onclick=\"olsShowTab('rewrite')\">Rewrite</button><button type='button' class='ols-tab' data-tab='logs' onclick=\"olsShowTab('logs')\">Logs</button><button type='button' class='ols-tab' data-tab='editor' onclick=\"olsShowTab('editor')\">Advanced</button><a class='back' href='index.cgi'>← All Websites</a></nav>";
+print "<nav class='ols-tabs'><button type='button' class='ols-tab active' data-tab='overview' onclick=\"olsShowTab('overview')\">Overview</button><button type='button' class='ols-tab' data-tab='php' onclick=\"olsShowTab('php')\">PHP</button><button type='button' class='ols-tab' data-tab='ssl' onclick=\"olsShowTab('ssl')\">SSL</button><button type='button' class='ols-tab' data-tab='rewrite' onclick=\"olsShowTab('rewrite')\">Rewrite</button><button type='button' class='ols-tab' data-tab='logs' onclick=\"olsShowTab('logs')\">Logs</button><button type='button' class='ols-tab' data-tab='editor' onclick=\"olsShowTab('editor')\">Advanced</button><a class='back' href='index.cgi'>← All Websites</a></nav>";
 
 sub info { my ($label,$value)=@_; print "<div><span class='ols-label'>".&html_escape($label)."</span><span class='ols-value'>".&html_escape($value || '—')."</span></div>"; }
 
-print "<div class='ols-panel' id='overview'><section class='ols-section'><h2>Website Overview</h2><div class='ols-body'><div class='ols-info'>";
+print "<div class='ols-panel active' id='overview'><section class='ols-section'><h2>Website Overview</h2><div class='ols-body'><div class='ols-info'>";
 info('Virtual Host',$vh); info('Domain',$domain); info('Aliases',$aliases); info('Document Root',$docroot); info('Cache',$cache); info('Configuration',$vh_conf);
 print "</div></div></section></div>";
 
