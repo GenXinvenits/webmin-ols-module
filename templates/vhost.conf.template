@@ -80,8 +80,6 @@ rewrite {
   autoLoadHtaccess              1
 }
 
-__SSL_CONFIG__
-
 module cache {
   storagePath                   $VH_ROOT/cachedata/
   checkPrivateCache             1
