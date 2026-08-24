@@ -65,6 +65,7 @@ print <<'HTML';
 .ols-row:last-child { border-bottom:0; }
 .ols-head { font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; opacity:.68; background:var(--table-header-bg, rgba(128,128,128,.08)); }
 .ols-domain { font-weight:700; }
+.ols-subdomains { margin-top:3px; font-size:11px; opacity:.65; line-height:1.4; }
 .ols-root { font-size:12px; opacity:.72; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ols-meta { font-size:11px; opacity:.72; }
 .ols-status { display:inline-block; width:max-content; padding:3px 8px; border-radius:999px; font-size:10px; font-weight:700; background:rgba(40,167,69,.14); color:#43b56b; }
@@ -103,7 +104,7 @@ else {
         my $root = "$config{'lsws'}/domains/$vh";
         my $vhconf = "$root/conf/vhconf.conf";
         my $conf_exists = -f $vhconf;
-        my ($domain, $docroot, $php) = ('', '', '');
+        my ($domain, $docroot, $aliases, $php) = ('', '', '', '');
         my $ssl = 0;
         my $rewrite = 0;
 
@@ -111,6 +112,7 @@ else {
             my $content = &read_file_contents($vhconf);
             $domain = resolve_value(get_value($content, 'vhDomain'), $vh);
             $docroot = resolve_value(get_value($content, 'docRoot'), $vh);
+            $aliases = resolve_value(get_value($content, 'vhAliases'), $vh);
             $php = $1 if $content =~ /^\s*path\s+(\S+)\s*$/m;
             $ssl = 1 if $content =~ /^\s*vhssl\s*\{/m;
             $rewrite = 1 if $content =~ /^\s*rewrite\s*\{/m;
@@ -119,9 +121,21 @@ else {
         $domain = $vh unless $domain;
         $docroot = "$root/public_html" unless $docroot;
 
+        # Show actual aliases/subdomains below the primary domain instead of
+        # repeating the virtual-host name. Multiple aliases are displayed as
+        # a comma-separated list, with LiteSpeed variables resolved.
+        my @subdomains;
+        if ($aliases) {
+            @subdomains = split(/\s+/, $aliases);
+            @subdomains = grep { $_ ne $domain } @subdomains;
+        }
+
         print "<div class='ols-row'>";
         print "<div><div class='ols-domain'>" . &html_escape($domain) . "</div>";
-        print "<div class='ols-meta'>" . &html_escape($vh) . "</div></div>";
+        if (@subdomains) {
+            print "<div class='ols-subdomains'>" . &html_escape(join(', ', @subdomains)) . "</div>";
+        }
+        print "</div>";
         print "<div class='ols-root'>" . &html_escape($docroot) . "</div>";
         print "<div>";
         print $conf_exists ? "<span class='ols-status'>READY</span>" : "<span class='ols-status off'>NOT CONFIGURED</span>";
