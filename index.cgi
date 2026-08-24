@@ -218,9 +218,6 @@ if ($total > $per_page) {
     print "</div></div>";
 }
 
-print "<div class='ols-server'>";
-print "<a href='listeners.cgi'>Listeners</a>";
-print "</div>";
 print "</div>";
 
 &ui_print_footer('', 'index.cgi');
