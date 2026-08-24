@@ -27,8 +27,6 @@ sub get_value {
     return '';
 }
 
-# Resolve the common LiteSpeed variables used in vhconf.conf so they are
-# never exposed as raw $VH_NAME / $VH_ROOT text in the dashboard.
 sub resolve_value {
     my ($value, $vh) = @_;
     return '' unless defined $value;
@@ -43,7 +41,6 @@ sub resolve_value {
     return $value;
 }
 
-# Keep the dashboard lightweight: show at most 20 domains per page.
 my $per_page = 20;
 my $page = $in{'page'} || 1;
 $page =~ s/\D//g;
@@ -64,7 +61,7 @@ print <<'HTML';
 .ols-hero h1 { margin:0 0 5px; font-size:26px; }
 .ols-hero p { margin:0; opacity:.72; font-size:13px; }
 .ols-list { border:1px solid var(--border-color, rgba(128,128,128,.25)); border-radius:10px; overflow:hidden; background:var(--body-bg, transparent); }
-.ols-row { display:grid; grid-template-columns:minmax(260px,2fr) minmax(190px,1.2fr) 150px 100px; align-items:center; gap:16px; padding:13px 16px; border-bottom:1px solid var(--border-color, rgba(128,128,128,.18)); }
+.ols-row { display:grid; grid-template-columns:minmax(220px,1fr) minmax(420px,2.4fr) 150px 100px; align-items:center; gap:16px; padding:13px 16px; border-bottom:1px solid var(--border-color, rgba(128,128,128,.18)); }
 .ols-row:last-child { border-bottom:0; }
 .ols-head { font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:700; opacity:.68; background:var(--table-header-bg, rgba(128,128,128,.08)); }
 .ols-domain { font-weight:700; }
@@ -119,8 +116,6 @@ else {
             $rewrite = 1 if $content =~ /^\s*rewrite\s*\{/m;
         }
 
-        # Fall back to the virtual-host name when vhDomain is absent or
-        # resolves to an empty value. Resolve docRoot against the real host.
         $domain = $vh unless $domain;
         $docroot = "$root/public_html" unless $docroot;
 
