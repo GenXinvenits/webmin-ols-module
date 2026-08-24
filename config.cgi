@@ -75,7 +75,6 @@ sub get_value {
     return '';
 }
 
-# Resolve common OpenLiteSpeed variables for display.
 sub resolve_value {
     my ($value) = @_;
     return '' unless defined $value;
@@ -87,7 +86,6 @@ sub resolve_value {
 }
 
 my $docroot=resolve_value(get_value('docRoot')); my $domain=resolve_value(get_value('vhDomain')); my $aliases=resolve_value(get_value('vhAliases'));
-# If vhDomain is configured as $VH_NAME, show the actual selected virtual host name.
 $domain = $vh if !$domain || $domain eq '$VH_NAME';
 $domain = $vh if !$domain;
 $docroot = "$vh_root/public_html" if !$docroot || $docroot eq '$VH_ROOT/public_html';
@@ -95,6 +93,14 @@ my $php_handler = ($content =~ /^\s*add\s+(\S+)\s+php\s*$/m) ? $1 : '';
 my $php_path = ($content =~ /^\s*path\s+(\S+)\s*$/m) ? $1 : '';
 my $php_user = ($content =~ /^\s*extUser\s+(\S+)\s*$/m) ? $1 : '';
 my $php_group = ($content =~ /^\s*extGroup\s+(\S+)\s*$/m) ? $1 : '';
+
+# Detect PHP version from the LiteSpeed PHP processor directory.
+# Examples: lsphp83 -> PHP 8.3, lsphp74 -> PHP 7.4, lsphp56 -> PHP 5.6.
+my $php_version = '';
+if ($php_path =~ m{(?:^|/)lsphp(\d)(\d)(?:/|$)}) {
+    $php_version = "$1.$2";
+}
+
 my $rewrite = ($content =~ /^\s*rewrite\s*\{/m) ? 'Enabled' : 'Disabled';
 my $htaccess = ($content =~ /autoLoadHtaccess\s+1/) ? 'Enabled' : 'Disabled';
 my $ssl = ($content =~ /^\s*vhssl\s*\{/m) ? 'Enabled' : 'Disabled';
@@ -142,7 +148,7 @@ info('Virtual Host',$vh); info('Domain',$domain); info('Aliases',$aliases); info
 print "</div></div></section></div>";
 
 print "<div class='ols-panel' id='php'><section class='ols-section'><h2>PHP Runtime</h2><div class='ols-body'><div class='ols-info'>";
-info('Handler',$php_handler); info('Processor',$php_path); info('User',$php_user); info('Group',$php_group);
+info('PHP Version',$php_version || 'Not detected'); info('Handler',$php_handler); info('Processor',$php_path); info('User',$php_user); info('Group',$php_group);
 print "</div></div></section></div>";
 
 print "<div class='ols-panel' id='ssl'><section class='ols-section'><h2>SSL / HTTPS</h2><div class='ols-body'><div class='ols-info'>";
