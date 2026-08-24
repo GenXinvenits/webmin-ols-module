@@ -101,9 +101,11 @@ else {
             print "<a class='ols-action' href='config.cgi?vh=" . &urlize($vh) . "'>Manage →</a>";
             print "</div>";
             print "<div class='ols-meta'>";
+            my $ssl_class = $ssl ? ' ok' : '';
+            my $rewrite_class = $rewrite ? ' ok' : '';
             print "<span class='ols-pill ok'>PHP " . &html_escape($php || 'Configured') . "</span>";
-            print "<span class='ols-pill" . ($ssl ? " ok" : "") . "">SSL " . ($ssl ? 'Enabled' : 'Disabled') . "</span>";
-            print "<span class='ols-pill" . ($rewrite ? " ok" : "") . "">Rewrite " . ($rewrite ? 'Enabled' : 'Disabled') . "</span>";
+            print "<span class='ols-pill$ssl_class'>SSL " . ($ssl ? 'Enabled' : 'Disabled') . "</span>";
+            print "<span class='ols-pill$rewrite_class'>Rewrite " . ($rewrite ? 'Enabled' : 'Disabled') . "</span>";
             print "</div>";
         }
         else {
