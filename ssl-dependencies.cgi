@@ -21,7 +21,9 @@ sub distro_info {
     if (open(my $fh, '<', '/etc/os-release')) {
         while (my $line = <$fh>) {
             if ($line =~ /^([A-Z_]+)=(.*)$/) {
-                my ($k,$v)=($1,$2); $v =~ s/^"|"$//g; $d{$k}=$v;
+                my ($k,$v)=($1,$2);
+                $v =~ s/^"|"$//g;
+                $d{$k}=$v;
             }
         }
         close($fh);
@@ -40,16 +42,28 @@ sub pkg_installed {
     my ($pkg,$pm) = @_;
     return 0 unless $pm;
     my ($e,$o);
-    if ($pm eq 'apt') { ($e,$o)=run_cmd('dpkg-query -W -f=${Status} '.quotemeta($pkg)); return !$e && $o =~ /install ok installed/; }
-    if ($pm eq 'dnf' || $pm eq 'yum') { ($e,$o)=run_cmd($pm.' list installed '.quotemeta($pkg)); return !$e; }
-    if ($pm eq 'pacman') { ($e,$o)=run_cmd('pacman -Q '.quotemeta($pkg)); return !$e; }
-    if ($pm eq 'zypper') { ($e,$o)=run_cmd('rpm -q '.quotemeta($pkg)); return !$e; }
+    if ($pm eq 'apt') {
+        ($e,$o)=run_cmd('dpkg-query -W -f=${Status} '.quotemeta($pkg));
+        return !$e && $o =~ /install ok installed/;
+    }
+    if ($pm eq 'dnf' || $pm eq 'yum') {
+        ($e,$o)=run_cmd($pm.' list installed '.quotemeta($pkg));
+        return !$e;
+    }
+    if ($pm eq 'pacman') {
+        ($e,$o)=run_cmd('pacman -Q '.quotemeta($pkg));
+        return !$e;
+    }
+    if ($pm eq 'zypper') {
+        ($e,$o)=run_cmd('rpm -q '.quotemeta($pkg));
+        return !$e;
+    }
     return 0;
 }
 sub install_packages {
     my ($pm,@pkgs)=@_;
-    my $list=join(' ',map {quotemeta($_)} @pkgs);
     return (1,'No supported package manager was found.') unless $pm;
+    my $list=join(' ',map {quotemeta($_)} @pkgs);
     my $cmd;
     if ($pm eq 'apt') { $cmd="DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y $list"; }
     elsif ($pm eq 'dnf') { $cmd="dnf install -y $list"; }
@@ -59,37 +73,64 @@ sub install_packages {
     else { return (1,'Unsupported package manager.'); }
     return run_cmd($cmd);
 }
+sub acme_path {
+    for my $candidate (
+        '/root/.acme.sh/acme.sh',
+        '/usr/local/bin/acme.sh',
+        '/usr/bin/acme.sh',
+        (($ENV{'HOME'} || '/root').'/ .acme.sh/acme.sh')
+    ) {
+        $candidate =~ s{/ }{/}g;
+        return $candidate if -x $candidate;
+    }
+    my ($e,$o)=run_cmd('command -v acme.sh');
+    if (!$e && $o =~ /(\/[^\s]+\/acme\.sh)/) { return $1; }
+    return '';
+}
 
 my %d=distro_info();
 my $pm=package_manager();
-my $message=''; my $error='';
+my $message='';
+my $error='';
 
 if ($in{'action'} eq 'install_packages') {
-    my @needed;
-    my @candidates = ($pm eq 'apt' ? ('openssl','curl','socat') : ('openssl','curl','socat'));
-    push @needed, grep {!pkg_installed($_,$pm)} @candidates;
+    my @needed=grep {!pkg_installed($_,$pm)} qw(openssl curl socat);
     if (@needed) {
         my ($e,$o)=install_packages($pm,@needed);
         $e ? ($error="Package installation failed.\n$o") : ($message='Required SSL packages installed successfully.');
-    } else { $message='All required system packages are already installed.'; }
-}
-
-if ($in{'action'} eq 'install_acme') {
-    if (!command_exists('curl')) { $error='curl is required before acme.sh can be installed.'; }
-    else {
-        my $home=$ENV{'HOME'} || '/root';
-        my ($e,$o)=run_cmd("export HOME=".quotemeta($home)."; curl -fsSL https://get.acme.sh | sh");
-        if (!$e) { $message='acme.sh installed successfully. Refresh this page to verify it.'; }
-        else { $error="acme.sh installation failed.\n$o"; }
+    } else {
+        $message='All required system packages are already installed.';
     }
 }
 
-my $acme='';
-for my $candidate ('/root/.acme.sh/acme.sh', ($ENV{'HOME'}||'').'/ .acme.sh/acme.sh') {
-    $candidate =~ s{/ }{/}g;
-    if (-x $candidate) { $acme=$candidate; last; }
+if ($in{'action'} eq 'install_acme') {
+    if (!command_exists('curl')) {
+        $error='curl is required before acme.sh can be installed.';
+    } elsif (acme_path()) {
+        $message='acme.sh is already installed.';
+    } else {
+        my $home='/root';
+        my ($e,$o)=run_cmd("export HOME=/root; curl -fsSL https://get.acme.sh | sh");
+        if (!$e && acme_path()) {
+            $message='acme.sh installed successfully.';
+        } elsif (!$e) {
+            $message='acme.sh installation completed. Refresh the page to verify the installation.';
+        } else {
+            $error="acme.sh installation failed.\n$o";
+        }
+    }
 }
-$acme ||= 'Not installed';
+
+my $acme=acme_path();
+my @pkg_rows;
+for my $pkg ('openssl','curl','socat') {
+    push @pkg_rows, [$pkg,pkg_installed($pkg,$pm)];
+}
+my $missing=grep {!$_->[1]} @pkg_rows;
+
+my $vh=$in{'vh'} || '';
+$vh =~ s/[^A-Za-z0-9._-]//g;
+my $back=$vh ? "ssl.cgi?vh=".&urlize($vh) : "index.cgi";
 
 print <<'HTML';
 <style>
@@ -97,14 +138,8 @@ print <<'HTML';
 </style>
 HTML
 
-my @pkg_rows;
-for my $pkg ('openssl','curl','socat') {
-    my $ok=pkg_installed($pkg,$pm);
-    push @pkg_rows, [$pkg,$ok];
-}
-
 print "<div class='ols-deps'>";
-print "<div class='ols-hero'><span class='ols-kicker'>SSL System Requirements</span><h1>Dependencies</h1><p class='ols-muted'>The module checks the operating system before enabling certificate operations. Missing packages can be installed from the system package manager.</p></div>";
+print "<div class='ols-hero'><span class='ols-kicker'>SSL System Requirements</span><h1>Dependencies</h1><p class='ols-muted'>The module checks the operating system before enabling certificate operations. Missing packages can be installed from the detected package manager.</p></div>";
 print "<div class='ols-message ols-success'>".esc($message)."</div>" if $message;
 print "<div class='ols-message ols-error'>".esc($error)."</div>" if $error;
 
@@ -114,14 +149,14 @@ for my $r (@pkg_rows) {
 }
 print "</div></section>";
 
-my $missing=grep {!$_->[1]} @pkg_rows;
 print "<section class='ols-card'><h2>ACME client</h2><div class='ols-body'>";
-print "<div class='ols-row'><div><div class='ols-name'>acme.sh</div><div class='ols-desc'>Used for Let's Encrypt and ZeroSSL certificate issuance and renewal.</div></div><div class='".($acme eq 'Not installed'?'ols-missing':'ols-ok')."'>".esc($acme eq 'Not installed'?'Not installed':'Installed')."</div></div>";
+print "<div class='ols-row'><div><div class='ols-name'>acme.sh</div><div class='ols-desc'>Used for Let's Encrypt and ZeroSSL certificate issuance and renewal.</div></div><div class='".($acme?'ols-ok':'ols-missing')."'>".($acme?'Installed':'Not installed')."</div></div>";
 print "<p class='ols-muted'>Let's Encrypt and ZeroSSL do not require separate distro packages when acme.sh is used as the ACME client.</p>";
-if ($missing) { print "<a class='ols-btn primary' href='ssl-dependencies.cgi?action=install_packages'>Install missing packages</a> "; }
-if ($acme eq 'Not installed') { print "<a class='ols-btn primary' href='ssl-dependencies.cgi?action=install_acme'>Install acme.sh</a>"; }
+print "<a class='ols-btn primary' href='ssl-dependencies.cgi?action=install_packages".($vh?'&vh='.&urlize($vh):'')."'>Install missing packages</a> " if $missing;
+print "<a class='ols-btn primary' href='ssl-dependencies.cgi?action=install_acme".($vh?'&vh='.&urlize($vh):'')."'>Install acme.sh</a>" if !$acme && !$missing;
+print "<a class='ols-btn' href='ssl-dependencies.cgi".($vh?'?vh='.&urlize($vh):'')."'>Refresh status</a>" if $acme || !$missing;
 print "</div></section>";
 
 print "<section class='ols-card'><h2>Detected system</h2><div class='ols-body'><div class='ols-row'><div class='ols-name'>Distribution</div><div>".esc($d{'PRETTY_NAME'} || $d{'NAME'} || 'Unknown')."</div></div><div class='ols-row'><div class='ols-name'>Package manager</div><div>".esc($pm || 'Not detected')."</div></div></div></section>";
-print "<p><a href='javascript:history.back()'>← Back</a></p></div>";
+print "<p><a href='".&html_escape($back)."'>← Back to SSL</a></p></div>";
 &ui_print_footer('');
