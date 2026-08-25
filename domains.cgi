@@ -74,15 +74,21 @@ sub build_aliases {
         next if $seen{$alias}++;
         push @aliases, $alias;
     }
-    my $www = "www." . lc($domain);
-    unshift @aliases, $www unless $seen{$www}++;
+    if ($domain =~ /^[^.]+\.[^.]+$/) {
+        my $www = "www." . lc($domain);
+        unshift @aliases, $www unless $seen{$www}++;
+    }
     return join(' ', @aliases);
 }
 
 sub build_template_aliases {
-    my ($prefixes) = @_;
-    my @aliases = ('www.\$VH_NAME');
-    my %seen = ('www' => 1);
+    my ($domain, $prefixes) = @_;
+    my @aliases;
+    my %seen;
+    if ($domain =~ /^[^.]+\.[^.]+$/) {
+        push @aliases, 'www.\$VH_NAME';
+        $seen{'www'} = 1;
+    }
     for my $prefix (split(/[,\s]+/, $prefixes || '')) {
         next unless $prefix;
         $prefix = lc($prefix);
@@ -192,7 +198,7 @@ extprocessor www-data {
 }
 PHP
     }
-    my $alias_line = "vhAliases                        " . build_template_aliases($alias_prefixes) . "\n";
+    my $alias_line = "vhAliases                        " . build_template_aliases($domain, $alias_prefixes) . "\n";
     $template =~ s/__DOMAIN__/$domain/g;
     $template =~ s/__VH_ALIASES_LINE__/$alias_line/;
     $template =~ s/__PHP_CONFIG__/$php/;
