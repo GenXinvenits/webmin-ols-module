@@ -43,8 +43,10 @@ sub pkg_installed {
     return 0 unless $pm;
     my ($e,$o);
     if ($pm eq 'apt') {
-        ($e,$o)=run_cmd('dpkg-query -W -f=${Status} '.quotemeta($pkg));
-        return !$e && $o =~ /install ok installed/;
+        # Quote the dpkg format string so the shell does not expand ${Status}.
+        ($e,$o)=run_cmd("dpkg-query -W -f='\${Status}' " . quotemeta($pkg));
+        return 1 if !$e && $o =~ /Status:\s+install\s+ok\s+installed/;
+        return 0;
     }
     if ($pm eq 'dnf' || $pm eq 'yum') {
         ($e,$o)=run_cmd($pm.' list installed '.quotemeta($pkg));
