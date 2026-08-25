@@ -39,6 +39,18 @@ sub write_and_apply {
         &backquote_command('/usr/local/lsws/bin/lswsctrl restart 2>&1');
         return (0, "OpenLiteSpeed failed to restart. The previous configuration was restored.\n$restart");
     }
+
+    # Keep the two most recent Webmin configuration backups and remove older ones.
+    my @backups = glob("$conf.webmin-*.bak");
+    @backups = sort {
+        my ($at) = $a =~ /-(\d+)\.bak$/;
+        my ($bt) = $b =~ /-(\d+)\.bak$/;
+        ($at || 0) <=> ($bt || 0);
+    } @backups;
+    if (@backups > 2) {
+        unlink @backups[0 .. $#backups - 2];
+    }
+
     return (1, '');
 }
 
