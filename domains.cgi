@@ -62,6 +62,14 @@ sub add_listener_maps {
     my ($text,$vh,$aliases)=@_;
     my @maps;
     my %seen;
+
+    # Apex domains get only their www alias. A subdomain vhost needs a
+    # self-map because it has no automatic www alias.
+    if ($vh =~ /^[^.]+\.[^.]+\.[^.]+$/) {
+        push @maps, "    map $vh $vh\n";
+        $seen{lc($vh)} = 1;
+    }
+
     for my $alias (split(/\s+/,$aliases || '')) {
         next unless $alias;
         next if lc($alias) eq lc($vh);
@@ -107,7 +115,7 @@ extprocessor www-data {
   env                           LSAPI_CHILDREN=2
   env                           LSAPI_AVOID_FORK=200M
   env                           LSAPI_MAX_IDLE=30
-  initTimeout                   30
+  initTimeout                  30
   retryTimeout                  0
   persistConn                   1
   pcKeepAliveTimeout            2
