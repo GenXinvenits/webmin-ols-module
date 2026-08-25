@@ -1,0 +1,34 @@
+name: Fix SSL provider radio layout
+
+on:
+  push:
+    branches: [alpha]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.head_commit.message != 'Fix SSL provider radio layout [final]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fix radio spacing
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('ssl.cgi')
+          s = p.read_text()
+          old = '''.ols-radio-option input[type="radio"]{appearance:none !important;-webkit-appearance:none !important;width:18px !important;height:18px !important;margin:0 10px 0 0 !important;'''
+          new = '''.ols-radio-option input[type="radio"]{appearance:none !important;-webkit-appearance:none !important;width:18px !important;height:18px !important;margin:0 !important;'''
+          if old not in s:
+              raise SystemExit('radio CSS block not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          rm -f .github/workflows/fix-ssl-radio-layout.yml
+          git config user.name 'GenXinvenits'
+          git config user.email 'genxinvenits@outlook.com'
+          git add ssl.cgi .github/workflows/fix-ssl-radio-layout.yml
+          git commit -m 'Fix SSL provider radio layout [final]'
+          git push
