@@ -164,7 +164,17 @@ if ($in{'action'} eq 'add') {
         elsif (-e $vh_conf) { $error="The virtual host configuration already exists: $vh_conf"; }
         else {
             my $vh_config=build_vhconf($domain,$aliases,$alias_prefixes); if (!$vh_config) { $error='Unable to build the virtual host configuration from the module template.'; }
-            else { my $fh; if (!open($fh,'>',$vh_conf)) { $error="Unable to create $vh_conf: $!"; } else { print $fh $vh_config; close($fh); } }
+            else {
+                my $fh;
+                if (!open($fh,'>',$vh_conf)) { $error="Unable to create $vh_conf: $!"; }
+                else {
+                    print $fh $vh_config;
+                    close($fh);
+                    if (system('/bin/chown','lsadm:nogroup',$vh_conf) != 0) {
+                        $error="Unable to set configuration ownership: $!";
+                    }
+                }
+            }
             if (!$error) {
                 my $block="\nvirtualhost $domain {\n  vhRoot                  \$SERVER_ROOT/domains/\$VH_NAME/\n  configFile              \$SERVER_ROOT/domains/\$VH_NAME/conf/vhconf.conf\n  allowSymbolLink         1\n  enableScript            1\n  restrained              1\n  maxKeepAliveReq         0\n  setUIDMode              0\n}\n";
                 my $new=add_listener_maps($content.$block,$domain,$aliases); my ($ok,$out)=write_and_apply($content,$new);
