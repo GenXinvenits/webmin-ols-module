@@ -1,0 +1,95 @@
+name: Fix virtualhost spacing
+
+on:
+  push:
+    branches: [testing]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.head_commit.message != 'Fix virtualhost spacing [final]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fix domains.cgi virtualhost spacing
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('domains.cgi')
+          s = p.read_text()
+
+          old = '''sub normalize_vhost_spacing {
+              my ($text)=@_;
+              $text =~ s{(^[ \\t]*\\}[ \\t]*\\n)(?:[ \\t]*\\n)*(?=^[ \\t]*virtualhost\\s+\\S+\\s*\\{)}{$1\\n}gm;
+              return $text;
+          }'''
+
+          new = '''sub normalize_vhost_spacing {
+              my ($text)=@_;
+              $text =~ s/\\r\\n/\\n/g;
+              my @lines=split(/\\n/,$text,-1);
+              my @out;
+              my $in_vhost=0;
+              my $depth=0;
+              my $just_closed_vhost=0;
+              my @pending_blank;
+
+              for my $line (@lines) {
+                  if (!$in_vhost && $line =~ /^\\s*virtualhost\\s+\\S+\\s*\\{/i) {
+                      if ($just_closed_vhost) {
+                          push @out, '';
+                          @pending_blank=();
+                          $just_closed_vhost=0;
+                      }
+                      $in_vhost=1;
+                      $depth=0;
+                  }
+
+                  if ($in_vhost) {
+                      push @out,$line;
+                      my $opens=()=$line =~ /\\{/g;
+                      my $closes=()=$line =~ /\\}/g;
+                      $depth += $opens-$closes;
+                      if ($depth<=0) {
+                          $in_vhost=0;
+                          $just_closed_vhost=1;
+                      }
+                      next;
+                  }
+
+                  if ($just_closed_vhost && $line =~ /^\\s*$/) {
+                      push @pending_blank,$line;
+                      next;
+                  }
+
+                  if ($just_closed_vhost) {
+                      push @out,@pending_blank;
+                      @pending_blank=();
+                      $just_closed_vhost=0;
+                  }
+                  push @out,$line;
+              }
+
+              return join("\\n",@out);
+          }'''
+
+          if old not in s:
+              raise SystemExit('normalize_vhost_spacing block not found')
+          s = s.replace(old, new, 1)
+
+          old = '''                my $new=add_listener_maps($content.$block,$domain,$aliases); my ($ok,$out)=write_and_apply($content,$new);'''
+          new = '''                my $new=add_listener_maps($content.$block,$domain,$aliases); $new=normalize_vhost_spacing($new); my ($ok,$out)=write_and_apply($content,$new);'''
+          if old not in s:
+              raise SystemExit('domain add configuration line not found')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+          rm -f .github/workflows/fix-vhost-spacing.yml
+          git config user.name 'GenXinvenits'
+          git config user.email 'genxinvenits@outlook.com'
+          git add domains.cgi .github/workflows/fix-vhost-spacing.yml
+          git commit -m 'Fix virtualhost spacing [final]'
+          git push
