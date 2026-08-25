@@ -11,19 +11,12 @@ sub run_cmd {
     my $exit = $? >> 8;
     return ($exit, $out);
 }
-sub command_exists {
-    my ($cmd) = @_;
-    my ($e, $o) = run_cmd('command -v ' . quotemeta($cmd));
-    return ($e == 0 && $o =~ /\S/);
-}
 sub distro_info {
     my %d;
-    if (open(my $fh, '<', '/etc/os-release')) {
-        while (my $line = <$fh>) {
+    if (open(my $fh,'<','/etc/os-release')) {
+        while (my $line=<$fh>) {
             if ($line =~ /^([A-Z_]+)=(.*)$/) {
-                my ($k,$v)=($1,$2);
-                $v =~ s/^"|"$//g;
-                $d{$k}=$v;
+                my ($k,$v)=($1,$2); $v =~ s/^"|"$//g; $d{$k}=$v;
             }
         }
         close($fh);
@@ -31,47 +24,58 @@ sub distro_info {
     return %d;
 }
 sub package_manager {
-    return 'apt' if command_exists('apt-get');
-    return 'dnf' if command_exists('dnf');
-    return 'yum' if command_exists('yum');
-    return 'pacman' if command_exists('pacman');
-    return 'zypper' if command_exists('zypper');
+    return 'apt' if -x '/usr/bin/dpkg' && -x '/usr/bin/apt-get';
+    return 'dnf' if -x '/usr/bin/dnf';
+    return 'yum' if -x '/usr/bin/yum';
+    return 'pacman' if -x '/usr/bin/pacman';
+    return 'zypper' if -x '/usr/bin/zypper';
     return '';
 }
 sub pkg_installed {
-    my ($pkg,$pm) = @_;
-    return 0 unless $pm;
-    my ($e,$o);
+    my ($pkg,$pm)=@_;
     if ($pm eq 'apt') {
-        # Quote the dpkg format string so the shell does not expand ${Status}.
-        ($e,$o)=run_cmd("dpkg-query -W -f='\${Status}' " . quotemeta($pkg));
-        return 1 if !$e && $o =~ /Status:\s+install\s+ok\s+installed/;
+        return 0 unless -x '/usr/bin/dpkg-query';
+        my ($e,$o)=run_cmd("/usr/bin/dpkg-query -W -f='\${Status}' " . $pkg);
+        return 1 if !$e && $o =~ /install ok installed/;
+        ($e,$o)=run_cmd("/usr/bin/dpkg -s " . $pkg);
+        return 1 if !$e && $o =~ /^Status:\s*install ok installed$/m;
         return 0;
     }
     if ($pm eq 'dnf' || $pm eq 'yum') {
-        ($e,$o)=run_cmd($pm.' list installed '.quotemeta($pkg));
+        my ($e,$o)=run_cmd("/usr/bin/$pm list installed " . $pkg);
         return !$e;
     }
     if ($pm eq 'pacman') {
-        ($e,$o)=run_cmd('pacman -Q '.quotemeta($pkg));
+        my ($e,$o)=run_cmd('/usr/bin/pacman -Q '.$pkg);
         return !$e;
     }
     if ($pm eq 'zypper') {
-        ($e,$o)=run_cmd('rpm -q '.quotemeta($pkg));
+        my ($e,$o)=run_cmd('/usr/bin/rpm -q '.$pkg);
         return !$e;
     }
     return 0;
 }
+sub executable_present {
+    my ($pkg)=@_;
+    return 1 if $pkg eq 'openssl' && -x '/usr/bin/openssl';
+    return 1 if $pkg eq 'certbot' && -x '/usr/bin/certbot';
+    return 0;
+}
+sub dependency_installed {
+    my ($pkg,$pm)=@_;
+    return 1 if executable_present($pkg);
+    return pkg_installed($pkg,$pm);
+}
 sub install_packages {
     my ($pm,@pkgs)=@_;
     return (1,'No supported package manager was found.') unless $pm;
-    my $list=join(' ',map {quotemeta($_)} @pkgs);
+    my $list=join(' ',@pkgs);
     my $cmd;
-    if ($pm eq 'apt') { $cmd="DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y $list"; }
-    elsif ($pm eq 'dnf') { $cmd="dnf install -y $list"; }
-    elsif ($pm eq 'yum') { $cmd="yum install -y $list"; }
-    elsif ($pm eq 'pacman') { $cmd="pacman --noconfirm -S $list"; }
-    elsif ($pm eq 'zypper') { $cmd="zypper --non-interactive install $list"; }
+    if ($pm eq 'apt') { $cmd="DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update && DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y $list"; }
+    elsif ($pm eq 'dnf') { $cmd="/usr/bin/dnf install -y $list"; }
+    elsif ($pm eq 'yum') { $cmd="/usr/bin/yum install -y $list"; }
+    elsif ($pm eq 'pacman') { $cmd="/usr/bin/pacman --noconfirm -S $list"; }
+    elsif ($pm eq 'zypper') { $cmd="/usr/bin/zypper --non-interactive install $list"; }
     else { return (1,'Unsupported package manager.'); }
     return run_cmd($cmd);
 }
@@ -82,7 +86,7 @@ my $message='';
 my $error='';
 
 if ($in{'action'} eq 'install_packages') {
-    my @needed=grep {!pkg_installed($_,$pm)} qw(openssl certbot);
+    my @needed=grep {!dependency_installed($_,$pm)} qw(openssl certbot);
     if (@needed) {
         my ($e,$o)=install_packages($pm,@needed);
         $e ? ($error="Package installation failed.\n$o") : ($message='Required SSL packages and Certbot were installed successfully.');
@@ -93,7 +97,7 @@ if ($in{'action'} eq 'install_packages') {
 
 my @pkg_rows;
 for my $pkg ('openssl','certbot') {
-    push @pkg_rows, [$pkg,pkg_installed($pkg,$pm)];
+    push @pkg_rows, [$pkg,dependency_installed($pkg,$pm)];
 }
 my $missing=grep {!$_->[1]} @pkg_rows;
 
@@ -113,7 +117,7 @@ print "<div class='ols-message ols-success'>".esc($message)."</div>" if $message
 print "<div class='ols-message ols-error'>".esc($error)."</div>" if $error;
 print "<section class='ols-card'><h2>System packages</h2><div class='ols-body'>";
 for my $r (@pkg_rows) {
-    my $desc = $r->[0] eq 'certbot' ? "Certbot client used to obtain and renew Let's Encrypt certificates." : 'OpenSSL is required for certificate inspection and self-signed certificate generation.';
+    my $desc=$r->[0] eq 'certbot' ? "Certbot client used to obtain and renew Let's Encrypt certificates." : 'OpenSSL is required for certificate inspection and self-signed certificate generation.';
     print "<div class='ols-row'><div><div class='ols-name'>".esc($r->[0])."</div><div class='ols-desc'>".esc($desc)."</div></div><div class='".($r->[1]?'ols-ok':'ols-missing')."'>".($r->[1]?'Installed':'Missing')."</div></div>";
 }
 print "</div></section>";
