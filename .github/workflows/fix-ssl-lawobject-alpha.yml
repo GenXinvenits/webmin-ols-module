@@ -20,11 +20,20 @@ jobs:
           import re
           p = Path('ssl.cgi')
           s = p.read_text()
+
+          # Remove any previously-added lawobject CSS rules.
           s = re.sub(r'\.lawobject\{[^}]*\}', '', s)
-          marker = '.ols-radio-option input[type="radio"]:disabled{opacity:.4 !important}'
-          if marker not in s:
-              raise SystemExit('SSL radio CSS marker not found')
-          s = s.replace(marker, marker + '.lawobject{display:none !important}', 1)
+
+          # Webmin may inject empty .lawobject labels around form controls.
+          # Remove those generated elements client-side without changing the SSL UI.
+          marker = "<script>\n(function(){\n  var form=document.getElementById('ssl-cert-form');"
+          cleanup = "<script>\n(function(){\n  function removeLawObjects(){\n    document.querySelectorAll('label.lawobject').forEach(function(el){el.remove();});\n  }\n  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',removeLawObjects); else removeLawObjects();\n  new MutationObserver(removeLawObjects).observe(document.documentElement,{childList:true,subtree:true});\n})();\n</script>\n<script>\n(function(){\n  var form=document.getElementById('ssl-cert-form');"
+
+          if 'label.lawobject' not in s:
+              if marker not in s:
+                  raise SystemExit('SSL form script marker not found')
+              s = s.replace(marker, cleanup, 1)
+
           p.write_text(s)
           PY
           rm -f .github/workflows/fix-ssl-lawobject-alpha.yml
