@@ -245,7 +245,7 @@ sub remove_lineage {
     return (1,'') unless -d $archive_dir || -d $live_dir;
 
     my $stamp = time();
-    my $backup_root = "/tmp/webmin-ols-remove-$vh-$stamp-$$";
+    my $backup_root = "$base_dir/.webmin-ols-remove-$vh-$stamp-$$";
     mkdir($backup_root) or return (0,"Unable to create temporary SSL removal backup: $!");
 
     my $archive_backup = "$backup_root/archive";
