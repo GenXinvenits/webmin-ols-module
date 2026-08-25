@@ -19,11 +19,11 @@ jobs:
           from pathlib import Path
           p = Path('domains.cgi')
           s = p.read_text()
-          old = "push @aliases,'www.\\\\$VH_NAME'; $seen{'www'}=1;"
-          new = "push @aliases,'www.$VH_NAME'; $seen{'www'}=1;"
+          old = r"www.\$VH_NAME"
+          new = r"www.$VH_NAME"
           if old not in s:
-              raise SystemExit('escaped www VH_NAME alias pattern not found')
-          s = s.replace(old, new, 1)
+              raise SystemExit('escaped VH_NAME alias not found')
+          s = s.replace(old, new)
           p.write_text(s)
           PY
           rm -f .github/workflows/fix-vhalias.yml
@@ -32,5 +32,3 @@ jobs:
           git add domains.cgi .github/workflows/fix-vhalias.yml
           git commit -m 'Apply VH_NAME alias fix [final]'
           git push
-
-# Triggered from testing to apply the alias escaping fix.
