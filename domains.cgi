@@ -63,14 +63,14 @@ sub add_listener_maps {
     my @maps;
     my %seen;
     if ($vh =~ /^[^.]+\.[^.]+\.[^.]+$/) {
-        push @maps, "    map $vh $vh\n";
+        push @maps, "    map                     $vh $vh\n";
         $seen{lc($vh)} = 1;
     }
     for my $alias (split(/\s+/,$aliases || '')) {
         next unless $alias;
         next if lc($alias) eq lc($vh);
         next if $seen{lc($alias)}++;
-        push @maps,"    map $vh $alias\n";
+        push @maps,"    map                     $vh $alias\n";
     }
     my $maps=join('',@maps);
     $text =~ s{(^\s*listener\s+\S+\s*\{.*?)(^\})}{"$1$maps$2"}gems;
