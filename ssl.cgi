@@ -116,9 +116,8 @@ sub deploy_certificate {
         return (0,"Unable to create OpenLiteSpeed certificate directory $cert_root: $!");
     }
 
-    # Keep the Certbot lineage completely separate from the OLS deployment.
-    # Temporary files live in /tmp and no backup directories are created in
-    # /etc/letsencrypt/live, /etc/letsencrypt/archive, or the OLS cert tree.
+    # Keep deployment temporary files outside the OLS certificate tree.
+    # This also works when /tmp and /usr/local/lsws are different filesystems.
     my $tmp = "/tmp/webmin-ols-deploy-$$";
     return (0,"Unable to create temporary deployment directory $tmp: $!") unless mkdir($tmp,0700);
     my $tmp_cert = "$tmp/fullchain.pem";
@@ -134,9 +133,12 @@ sub deploy_certificate {
     my ($ke,$ko) = run_cmd('openssl pkey -in '.shell_quote($tmp_key).' -noout');
     if ($ke != 0) { unlink($tmp_cert,$tmp_key); rmdir($tmp); return (0,"The private key copied successfully but OpenSSL could not read it.\n$ko"); }
 
+    # Replace OLS files using copy, not rename: /tmp may be a different filesystem.
     unlink($fullchain,$privkey,$cert,$chain);
-    return (0,"Unable to install $tmp_cert as $fullchain") unless rename($tmp_cert,$fullchain);
-    return (0,"Unable to install $tmp_key as $privkey") unless rename($tmp_key,$privkey);
+    ($ok,$why) = copy_file_checked($tmp_cert,$fullchain,0644);
+    if (!$ok) { unlink($tmp_cert,$tmp_key); rmdir($tmp); return (0,$why); }
+    ($ok,$why) = copy_file_checked($tmp_key,$privkey,0600);
+    if (!$ok) { unlink($tmp_cert,$tmp_key); rmdir($tmp); return (0,$why); }
     return (0,"Unable to create $cert") unless system('/bin/cp','--',$fullchain,$cert) == 0;
     return (0,"Unable to create $chain") unless system('/bin/cp','--',$fullchain,$chain) == 0;
 
@@ -165,7 +167,9 @@ sub selfsigned_version {
         opendir(my $dh, $archive);
         my $max = 0;
         while (my $f = readdir($dh)) {
-            if ($f =~ /^cert(\d+)\.pem$/) { $max = $1 if $1 > $max; }
+            if ($f =~ /^cert(\d+)\.pem$/) {
+                $max = $1 if $1 > $max;
+            }
         }
         closedir($dh);
         $version = $max + 1 if $max;
@@ -218,6 +222,7 @@ if ($in{'action'} eq 'selfsigned') {
     if (open(my $fh,'>',$cnf)) {
         print $fh "[ req ]\ndefault_bits = $key_size\nprompt = no\ndefault_md = sha256\ndistinguished_name = dn\nx509_extensions = req_ext\n\n[ dn ]\nCN = $cn\n\n[ req_ext ]\nsubjectAltName = $san\nkeyUsage = digitalSignature,keyEncipherment\nextendedKeyUsage = serverAuth\n";
         close($fh);
+
         my ($e1,$o1)=run_cmd('openssl genrsa -out '.shell_quote($key).' '.$key_size);
         my ($e2,$o2)=run_cmd('openssl req -new -x509 -sha256 -key '.shell_quote($key).' -out '.shell_quote($crt).' -days '.$days.' -config '.shell_quote($cnf));
 
@@ -226,12 +231,16 @@ if ($in{'action'} eq 'selfsigned') {
             my $archive_cert = "$archive_dir/cert${version}.pem";
             my $archive_chain = "$archive_dir/chain${version}.pem";
             my $archive_fullchain = "$archive_dir/fullchain${version}.pem";
-            if (system('/bin/cp','-f',$key,$archive_key)==0 && system('/bin/cp','-f',$crt,$archive_cert)==0 && system('/bin/cp','-f',$crt,$archive_chain)==0 && system('/bin/cp','-f',$crt,$archive_fullchain)==0) {
+
+            if (system('/bin/cp','-f',$key,$archive_key)==0 &&
+                system('/bin/cp','-f',$crt,$archive_cert)==0 &&
+                system('/bin/cp','-f',$crt,$archive_chain)==0 &&
+                system('/bin/cp','-f',$crt,$archive_fullchain)==0) {
+
                 chmod(0600,$archive_key);
                 chmod(0644,$archive_cert,$archive_chain,$archive_fullchain);
 
-                # Exactly like the supplied Certbot-style script: live files
-                # are relative symlinks into archive, never copied files.
+                # Certbot-style lineage: live contains symlinks only.
                 unlink("$live_dir/privkey.pem","$live_dir/cert.pem","$live_dir/chain.pem","$live_dir/fullchain.pem");
                 symlink("../../archive/$vh/privkey${version}.pem", "$live_dir/privkey.pem");
                 symlink("../../archive/$vh/cert${version}.pem", "$live_dir/cert.pem");
@@ -244,7 +253,9 @@ if ($in{'action'} eq 'selfsigned') {
                     my ($ok,$out)=validate_and_restart();
                     if ($ok) {
                         $message="Self-signed certificate generated as version $version, Certbot-style lineage updated, deployed and OpenLiteSpeed restarted successfully.";
-                    } else { $error=$out; }
+                    } else {
+                        $error=$out;
+                    }
                 } else {
                     $error="Certificate lineage was created, but the certificate could not be deployed to OpenLiteSpeed.\n$do";
                 }
@@ -254,7 +265,9 @@ if ($in{'action'} eq 'selfsigned') {
         } else {
             $error="OpenSSL certificate generation failed.\n".($o1||$o2);
         }
-    } else { $error='Unable to create temporary OpenSSL configuration.'; }
+    } else {
+        $error='Unable to create temporary OpenSSL configuration.';
+    }
 
     unlink($key,$crt,$cnf);
     rmdir($tmp);
@@ -304,7 +317,9 @@ if ($in{'action'} eq 'letsencrypt_issue' || $in{'action'} eq 'renew') {
 my %info=cert_info($fullchain);
 my $exists=(-f $fullchain && -f $privkey);
 my $type='Not installed';
-if ($exists) { $type=(($info{'issuer'} || '') =~ /Let's Encrypt|ISRG/i) ? "Let's Encrypt" : 'Self-Signed / Other'; }
+if ($exists) {
+    $type=(($info{'issuer'} || '') =~ /Let's Encrypt|ISRG/i) ? "Let's Encrypt" : 'Self-Signed / Other';
+}
 my @domains=domains_for_vh();
 my $domain_text=join(', ',@domains);
 my $certbot_installed=certbot_path() ? 1 : 0;
@@ -312,7 +327,7 @@ my $default_type = ($type eq "Let's Encrypt") ? 'letsencrypt' : 'selfsigned';
 
 print <<'HTML';
 <style>
-.ols-ssl{max-width:1050px;margin:0 auto}.ols-ssl-hero{padding:28px 30px;border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:14px;margin-bottom:18px}.ols-kicker{font-size:11px;text-transform:uppercase;letter-spacing:.08em;opacity:.55;font-weight:700}.ols-ssl h1{margin:6px 0;font-size:29px}.ols-muted{opacity:.62;font-size:13px}.ols-card{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:12px;margin-bottom:16px;overflow:hidden}.ols-card h2{font-size:16px;margin:0;padding:16px 20px;border-bottom:1px solid var(--border-color,rgba(128,128,128,.16))}.ols-body{padding:18px 20px}.ols-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--border-color,rgba(128,128,128,.18));border:1px solid var(--border-color,rgba(128,128,128,.18));border-radius:9px;overflow:hidden}.ols-grid>div{padding:13px 15px;background:var(--body-bg,transparent);min-width:0}.ols-label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.06em;opacity:.52;margin-bottom:5px}.ols-value{font-size:13px;font-weight:600;word-break:break-word}.ols-badge{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(40,167,69,.13);color:#39a866;font-size:11px;font-weight:700}.ols-badge.off{background:rgba(128,128,128,.12);color:#888}.ols-actions{display:flex;gap:10px;flex-wrap:wrap}.ols-btn{display:inline-block;padding:10px 15px;border-radius:8px;text-decoration:none;border:1px solid var(--border-color,rgba(128,128,128,.25));font-weight:700;font-size:12px;color:inherit;background:transparent;cursor:pointer}.ols-btn:hover{background:rgba(128,128,128,.09)}.ols-btn.primary{background:#3584e4;color:#fff;border-color:#3584e4}.ols-btn.primary:hover{background:#2f75c7;border-color:#2f75c7}.ols-btn:disabled{opacity:.5;cursor:not-allowed}.ols-type-box{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:10px;padding:14px}.ols-radio-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.ols-radio-option{display:block;border:1px solid var(--border-color,rgba(128,128,128,.25));border-radius:9px;padding:12px;cursor:pointer}.ols-radio-option:hover{background:rgba(128,128,128,.06)}.ols-radio-option input[type="radio"]{appearance:none !important;-webkit-appearance:none !important;width:18px !important;height:18px !important;margin:0 10px 0 0 !important;padding:0 !important;border:2px solid currentColor !important;border-radius:50% !important;background:transparent !important;opacity:1 !important;position:static !important;pointer-events:auto !important;vertical-align:middle !important;display:inline-block !important;box-sizing:border-box !important}.ols-radio-option input[type="radio"]:checked{border-color:#3584e4 !important;background:radial-gradient(circle,#3584e4 0 4px,transparent 5px) !important}.ols-radio-option input[type="radio"]:disabled{opacity:.4 !important}.ols-radio-option .awradio{display:inline-flex !important;align-items:center !important;margin:0 8px 0 0 !important;vertical-align:middle !important}.ols-radio-option strong{display:inline-block;font-size:13px;vertical-align:middle;margin:0}.ols-radio-option span{display:block;margin:6px 0 0 0;font-size:11px;line-height:1.4;opacity:.62}.ols-cert-panel{margin-top:14px}.ols-form{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:end}.ols-field label{display:block;font-size:11px;font-weight:700;margin-bottom:6px;opacity:.7}.ols-field input{width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border-color,rgba(128,128,128,.28));border-radius:8px;background:transparent;color:inherit}.ols-note{font-size:12px;opacity:.62}.ols-message{padding:13px 15px;border-radius:9px;margin-bottom:16px;white-space:pre-wrap}.ols-success{background:rgba(40,167,69,.1);border:1px solid rgba(40,167,69,.25)}.ols-error{background:rgba(220,53,69,.1);border:1px solid rgba(220,53,69,.25)}@media(max-width:700px){.ols-grid,.ols-radio-grid,.ols-form{grid-template-columns:1fr}}
+.ols-ssl{max-width:1050px;margin:0 auto}.ols-ssl-hero{padding:28px 30px;border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:14px;margin-bottom:18px}.ols-kicker{font-size:11px;text-transform:uppercase;letter-spacing:.08em;opacity:.55;font-weight:700}.ols-ssl h1{margin:6px 0;font-size:29px}.ols-muted{opacity:.62;font-size:13px}.ols-card{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:12px;margin-bottom:16px;overflow:hidden}.ols-card h2{font-size:16px;margin:0;padding:16px 20px;border-bottom:1px solid var(--border-color,rgba(128,128,128,.16))}.ols-body{padding:18px 20px}.ols-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--border-color,rgba(128,128,128,.18));border:1px solid var(--border-color,rgba(128,128,128,.18));border-radius:9px;overflow:hidden}.ols-grid>div{padding:13px 15px;background:var(--body-bg,transparent);min-width:0}.ols-label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.06em;opacity:.52;margin-bottom:5px}.ols-value{font-size:13px;font-weight:600;word-break:break-word}.ols-badge{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(40,167,69,.13);color:#39a866;font-size:11px;font-weight:700}.ols-badge.off{background:rgba(128,128,128,.12);color:#888}.ols-actions{display:flex;gap:10px;flex-wrap:wrap}.ols-btn{display:inline-block;padding:10px 15px;border-radius:8px;text-decoration:none;border:1px solid var(--border-color,rgba(128,128,128,.25));font-weight:700;font-size:12px;color:inherit;background:transparent;cursor:pointer}.ols-btn:hover{background:rgba(128,128,128,.09)}.ols-btn.primary{background:#3584e4;color:#fff;border-color:#3584e4}.ols-btn.primary:hover{background:#2f75c7;border-color:#2f75c7}.ols-btn:disabled{opacity:.5;cursor:not-allowed}.ols-type-box{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:10px;padding:14px}.ols-radio-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.ols-radio-option{display:block;border:1px solid var(--border-color,rgba(128,128,128,.25));border-radius:9px;padding:12px;cursor:pointer}.ols-radio-option:hover{background:rgba(128,128,128,.06)}.ols-radio-option input[type="radio"]{appearance:none !important;-webkit-appearance:none !important;width:18px !important;height:18px !important;margin:0 10px 0 0 !important;padding:0 !important;border:2px solid currentColor !important;border-radius:50% !important;background:transparent !important;opacity:1 !important;position:static !important;pointer-events:auto !important;vertical-align:middle !important;display:inline-block !important;box-sizing:border-box !important}.ols-radio-option input[type="radio"]:checked{border-color:#3584e4 !important;background:radial-gradient(circle,#3584e4 0 4px,transparent 5px) !important}.ols-radio-option input[type="radio"]:disabled{opacity:.4 !important}.lawobject{display:none !important}.ols-radio-option .awradio{display:inline-flex !important;align-items:center !important;margin:0 8px 0 0 !important;vertical-align:middle !important}.ols-radio-option strong{display:inline-block;font-size:13px;vertical-align:middle;margin:0}.ols-radio-option span{display:block;margin:6px 0 0 0;font-size:11px;line-height:1.4;opacity:.62}.ols-cert-panel{margin-top:14px}.ols-form{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:end}.ols-field label{display:block;font-size:11px;font-weight:700;margin-bottom:6px;opacity:.7}.ols-field input{width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border-color,rgba(128,128,128,.28));border-radius:8px;background:transparent;color:inherit}.ols-note{font-size:12px;opacity:.62}.ols-message{padding:13px 15px;border-radius:9px;margin-bottom:16px;white-space:pre-wrap}.ols-success{background:rgba(40,167,69,.1);border:1px solid rgba(40,167,69,.25)}.ols-error{background:rgba(220,53,69,.1);border:1px solid rgba(220,53,69,.25)}@media(max-width:700px){.ols-grid,.ols-radio-grid,.ols-form{grid-template-columns:1fr}}
 </style>
 HTML
 
