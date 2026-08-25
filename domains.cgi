@@ -133,6 +133,7 @@ extprocessor www-data {
 }
 }; }
     my $alias_line="vhAliases                        ".build_template_aliases($domain,$alias_prefixes)."\n";
+    # adminEmails must use the registrable domain, not a subdomain.
     my $admin_domain=$domain;
     my @domain_parts=split(/\./, $domain);
     $admin_domain=join('.', @domain_parts[-2,-1]) if @domain_parts > 2;
