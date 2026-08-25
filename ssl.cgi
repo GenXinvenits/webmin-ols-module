@@ -321,9 +321,13 @@ if (!$certbot_installed) {
 } else {
     print "<div class='ols-form'><div class='ols-field'><label for='ssl-email'>Account Email</label><input id='ssl-email' type='email' name='email' placeholder='you@example.com'></div></div><p class='ols-note'>Let's Encrypt will validate all domains configured for this virtual host through the website document root.</p>";
 }
-print "</div></div><div class='ols-actions' style='margin-top:14px'><button class='ols-btn primary' id='ssl-submit' type='submit'>".($default_type eq 'letsencrypt' ? "Issue Let's Encrypt Certificate" : 'Generate / Replace Self-Signed Certificate')."</button></div></form></div></section>";
+print "</div></div><div class='ols-actions' style='margin-top:14px'><button class='ols-btn primary' id='ssl-submit' type='submit'>".($default_type eq 'letsencrypt' ? "Issue Let's Encrypt Certificate" : 'Generate / Replace Self-Signed Certificate')."</button>";
+if ($certbot_installed) {
+    print "<button class='ols-btn primary' type='submit' name='action' value='renew' formnovalidate>Renew Let's Encrypt Certificate</button>";
+    print "<a class='ols-btn' href='ssl-dependencies.cgi?vh=".&urlize($vh)."'>SSL Dependencies</a>";
+}
+print "</div></form></div></section>";
 
-print "<section class='ols-card'><h2>Renewal</h2><div class='ols-body'><p class='ols-muted'>Renew the existing Let's Encrypt certificate when it is due for renewal.</p><form method='post' action='ssl.cgi'><input type='hidden' name='vh' value='".&quote_escape($vh)."'><input type='hidden' name='action' value='renew'><div class='ols-actions'><button class='ols-btn primary' type='submit'".($certbot_installed?'':' disabled').">Renew Let's Encrypt Certificate</button><a class='ols-btn' href='ssl-dependencies.cgi?vh=".&urlize($vh)."'>SSL Dependencies</a></div></form></div></section>";
 print "<p><a href='config.cgi?vh=".&urlize($vh)."&xnavigation=1#ssl'>← Back to SSL tab</a></p>";
 print "</div>";
 
