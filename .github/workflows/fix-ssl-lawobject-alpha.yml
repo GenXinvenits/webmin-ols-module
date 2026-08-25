@@ -1,0 +1,36 @@
+name: Fix SSL unwanted Webmin lawobject
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [alpha]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.head_commit.message != 'Remove unwanted SSL Webmin lawobject'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove unwanted lawobject elements from SSL page
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('ssl.cgi')
+          s = p.read_text()
+          import re
+          s = re.sub(r'\.lawobject\{[^}]*\}', '', s)
+          marker = '.ols-radio-option input[type="radio"]:disabled{opacity:.4 !important}'
+          if marker not in s:
+              raise SystemExit('SSL radio CSS marker not found')
+          s = s.replace(marker, marker + '.lawobject{display:none !important}', 1)
+          p.write_text(s)
+          PY
+          rm -f .github/workflows/fix-ssl-lawobject-alpha.yml
+          git config user.name 'GenXinvenits'
+          git config user.email 'genxinvenits@outlook.com'
+          git add ssl.cgi .github/workflows/fix-ssl-lawobject-alpha.yml
+          git commit -m 'Remove unwanted SSL Webmin lawobject'
+          git push origin HEAD:alpha
