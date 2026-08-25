@@ -457,6 +457,15 @@ print "<p><a href='config.cgi?vh=".&urlize($vh)."&xnavigation=1#ssl'>← Back to
 print <<'HTML';
 <script>
 (function(){
+  function removeLawObjects(){
+    document.querySelectorAll('label.lawobject').forEach(function(el){el.remove();});
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',removeLawObjects); else removeLawObjects();
+  new MutationObserver(removeLawObjects).observe(document.documentElement,{childList:true,subtree:true});
+})();
+</script>
+<script>
+(function(){
   var form=document.getElementById('ssl-cert-form'); if(!form)return;
   var action=document.getElementById('ssl-action'), selfPanel=document.getElementById('selfsigned-panel'), lePanel=document.getElementById('letsencrypt-panel'), customPanel=document.getElementById('custom-panel'), submit=document.getElementById('ssl-submit'), renew=document.getElementById('ssl-renew'), email=document.getElementById('ssl-email');
   var cert=document.getElementById('custom-cert'), key=document.getElementById('custom-key');
