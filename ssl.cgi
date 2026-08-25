@@ -4,15 +4,13 @@ require './openlitespeed-lib.pl';
 &ui_print_header(undef, 'SSL Certificate Manager', '');
 &ReadParse();
 
-# Restored from the last complete SSL Certificate Manager implementation.
-# The branch previously contained an incomplete placeholder that broke the page.
-
 my $vh = $in{'vh'} || '';
 $vh =~ s/[^A-Za-z0-9._-]//g;
 
 if (!$vh) {
     print "<h2>SSL Certificate Manager</h2><p>No virtual host was specified.</p><a href='index.cgi'>Back to OpenLiteSpeed</a>";
-    &ui_print_footer('index.cgi'); exit;
+    &ui_print_footer('index.cgi');
+    exit;
 }
 
 my $vh_root = "$config{'lsws'}/domains/$vh";
@@ -39,6 +37,14 @@ sub run_cmd {
     return ($exit, $out);
 }
 
+sub certbot_path {
+    my ($e,$o) = run_cmd('command -v certbot');
+    return '' if $e != 0;
+    $o =~ s/\s+$//;
+    return $o if -x $o;
+    return '';
+}
+
 sub cert_info {
     my ($file) = @_;
     my %i;
@@ -49,7 +55,10 @@ sub cert_info {
     $i{'issuer'} = $1 if $out =~ /^issuer=\s*(.+)$/m;
     $i{'from'} = $1 if $out =~ /^notBefore=\s*(.+)$/m;
     $i{'to'} = $1 if $out =~ /^notAfter=\s*(.+)$/m;
-    if ($out =~ /X509v3 Subject Alternative Name:\s*\n\s*(.+)/s) { $i{'san'} = $1; $i{'san'} =~ s/\s+/ /g; }
+    if ($out =~ /X509v3 Subject Alternative Name:\s*\n\s*(.+)/s) {
+        $i{'san'} = $1;
+        $i{'san'} =~ s/\s+/ /g;
+    }
     return %i;
 }
 
@@ -77,18 +86,21 @@ sub domains_for_vh {
         my $v = resolve_value(get_vh_value($field,$c));
         next if !$v;
         for my $d (split(/\s+/, $v)) {
-            $d =~ s/^https?:\/\///; $d =~ s/\/$//;
+            $d =~ s/^https?:\/\///;
+            $d =~ s/\/$//;
             push @domains, $d if $d =~ /^[A-Za-z0-9][A-Za-z0-9.-]*$/ && $d !~ /^\$/;
         }
     }
     push @domains, $vh if !@domains;
-    my %seen; return grep {!$seen{$_}++} @domains;
+    my %seen;
+    return grep {!$seen{$_}++} @domains;
 }
 
 sub backup_certificates {
     my $stamp = time();
     my $backup = "$cert_root/.webmin-backup-$stamp";
     return '' if !-d $cert_root && !-f $fullchain && !-f $privkey;
+    mkdir($cert_root) if !-d $cert_root;
     mkdir($backup) if !-d $backup;
     for my $f ($fullchain,$privkey,$cert,$chain) {
         next unless -f $f;
@@ -96,6 +108,20 @@ sub backup_certificates {
         system('/bin/cp','-a',$f,"$backup/$name") == 0 or return '';
     }
     return $backup;
+}
+
+sub deploy_certificate {
+    my ($source_cert,$source_key) = @_;
+    return 0 unless -f $source_cert && -f $source_key;
+    mkdir($cert_root) if !-d $cert_root;
+    backup_certificates();
+    return 0 unless system('/bin/cp','-f',$source_cert,$fullchain) == 0;
+    return 0 unless system('/bin/cp','-f',$source_key,$privkey) == 0;
+    system('/bin/cp','-f',$fullchain,$cert) == 0 or return 0;
+    system('/bin/cp','-f',$fullchain,$chain) == 0 or return 0;
+    chmod(0600,$privkey);
+    chmod(0644,$cert,$chain,$fullchain);
+    return 1;
 }
 
 sub validate_and_restart {
@@ -114,9 +140,10 @@ if ($in{'action'} eq 'selfsigned') {
     backup_certificates();
     my $tmp = "/tmp/webmin-ols-ssl-$$";
     mkdir($tmp);
-    my $key = "$tmp/privkey.pem"; my $crt = "$tmp/cert.pem";
+    my $key = "$tmp/privkey.pem";
+    my $crt = "$tmp/cert.pem";
     my $san = join(',', map { 'DNS:'.$_ } @domains);
-    my $cn = $domains[0];
+    my $cn = $domains[0] || $vh;
     my $cnf = "$tmp/openssl.cnf";
     if (open(my $fh,'>',$cnf)) {
         print $fh "[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=v3\n[dn]\nCN=$cn\n[v3]\nsubjectAltName=$san\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n";
@@ -124,61 +151,71 @@ if ($in{'action'} eq 'selfsigned') {
         my ($e1,$o1)=run_cmd('openssl genrsa -out '.shell_quote($key).' '.$key_size);
         my ($e2,$o2)=run_cmd('openssl req -new -x509 -sha256 -key '.shell_quote($key).' -out '.shell_quote($crt).' -days '.$days.' -config '.shell_quote($cnf));
         if ($e1==0 && $e2==0) {
-            if (system('/bin/cp','-f',$key,$privkey)==0 && system('/bin/cp','-f',$crt,$cert)==0) {
-                system('/bin/cp','-f',$crt,$chain); system('/bin/cp','-f',$crt,$fullchain);
-                chmod(0600,$privkey); chmod(0644,$cert,$chain,$fullchain);
+            if (deploy_certificate($crt,$key)) {
                 my ($ok,$out)=validate_and_restart();
                 if ($ok) { $message='Self-signed certificate generated, installed and OpenLiteSpeed restarted successfully.'; }
                 else { $error=$out; }
-            } else { $error='Unable to install the generated certificate files.'; }
-        } else { $error="OpenSSL certificate generation failed.\n".($o1||$o2); }
-    } else { $error='Unable to create temporary OpenSSL configuration.'; }
-    unlink($key,$crt,$cnf); rmdir($tmp);
+            } else {
+                $error='Unable to install the generated certificate files.';
+            }
+        } else {
+            $error="OpenSSL certificate generation failed.\n".($o1||$o2);
+        }
+    } else {
+        $error='Unable to create temporary OpenSSL configuration.';
+    }
+    unlink($key,$crt,$cnf);
+    rmdir($tmp);
 }
 
-if ($in{'action'} eq 'acme_issue' || $in{'action'} eq 'renew') {
-    my $ca = $in{'ca'} || 'letsencrypt';
-    $ca = 'zerossl' if $ca eq 'zerossl';
+if ($in{'action'} eq 'letsencrypt_issue' || $in{'action'} eq 'renew') {
     my $email = $in{'email'} || '';
     my @domains = domains_for_vh();
     my $webroot = "$vh_root/public_html";
-    my ($find_exit,$find_out)=run_cmd('command -v acme.sh');
-    my $acme = $find_exit == 0 ? $find_out : '/root/.acme.sh/acme.sh';
-    $acme =~ s/\s+$//;
-    if (!-x $acme) {
-        $error='acme.sh is not installed. Install acme.sh first, then return here.';
+    my $certbot = certbot_path();
+
+    if (!$certbot) {
+        $error="Certbot is not installed. Open the SSL Dependencies page and install certbot first.";
+    } elsif (!@domains) {
+        $error='No valid domains were found in the virtual host configuration.';
     } elsif (!-d $webroot) {
         $error='The virtual host document root does not exist: '.$webroot;
+    } elsif ($in{'action'} eq 'letsencrypt_issue' && !$email) {
+        $error="An email address is required for Let's Encrypt certificate issuance.";
     } else {
-        my $cmd = shell_quote($acme);
-        if ($ca eq 'zerossl') {
-            if ($email) { $cmd .= ' --register-account --server zerossl --accountemail '.shell_quote($email); }
-            $cmd .= ' --server zerossl';
-        } else { $cmd .= ' --server letsencrypt'; }
+        my $cert_name = $vh;
+        my $cmd = shell_quote($certbot);
+
         if ($in{'action'} eq 'renew') {
-            $cmd .= ' --renew -d '.shell_quote($domains[0]);
+            $cmd .= ' renew --cert-name '.shell_quote($cert_name).' --non-interactive';
         } else {
-            $cmd .= ' --issue --webroot '.shell_quote($webroot);
+            $cmd .= ' certonly --webroot -w '.shell_quote($webroot);
+            $cmd .= ' --cert-name '.shell_quote($cert_name);
+            $cmd .= ' --email '.shell_quote($email);
+            $cmd .= ' --agree-tos --non-interactive --keep-until-expiring';
             $cmd .= ' -d '.shell_quote($_) for @domains;
         }
+
         my ($e,$o)=run_cmd($cmd);
         if ($e==0) {
-            my $source="$ENV{'HOME'}/.acme.sh/$domains[0]";
-            $source="/root/.acme.sh/$domains[0]" if !-d $source;
-            my $issued="$source/fullchain.cer"; my $issued_key="$source/$domains[0].key";
-            if (-f $issued && -f $issued_key) {
-                mkdir($cert_root) if !-d $cert_root;
-                backup_certificates();
-                my $ok=system('/bin/cp','-f',$issued,$fullchain)==0 && system('/bin/cp','-f',$issued_key,$privkey)==0;
-                if ($ok) {
-                    system('/bin/cp','-f',$fullchain,$cert); system('/bin/cp','-f',$fullchain,$chain);
-                    chmod(0600,$privkey); chmod(0644,$cert,$chain,$fullchain);
-                    my ($valid,$vo)=validate_and_restart();
-                    if ($valid) { $message=ucfirst($ca).' certificate issued/deployed and OpenLiteSpeed restarted successfully.'; }
-                    else { $error=$vo; }
-                } else { $error='ACME succeeded, but the certificate could not be deployed.'; }
-            } else { $error="ACME reported success, but the expected certificate files were not found.\n".$o; }
-        } else { $error="ACME operation failed.\n".$o; }
+            my $source_root = "/etc/letsencrypt/live/$cert_name";
+            my $source_cert = "$source_root/fullchain.pem";
+            my $source_key = "$source_root/privkey.pem";
+            if (deploy_certificate($source_cert,$source_key)) {
+                my ($valid,$vo)=validate_and_restart();
+                if ($valid) {
+                    $message=$in{'action'} eq 'renew'
+                        ? "Let's Encrypt certificate renewed/deployed and OpenLiteSpeed restarted successfully."
+                        : "Let's Encrypt certificate issued/deployed and OpenLiteSpeed restarted successfully.";
+                } else {
+                    $error=$vo;
+                }
+            } else {
+                $error="Certbot completed successfully, but the certificate could not be deployed from $source_root.";
+            }
+        } else {
+            $error="Let's Encrypt operation failed.\n$o";
+        }
     }
 }
 
@@ -188,25 +225,24 @@ my $type='Not installed';
 if ($exists) {
     if (($info{'issuer'} || '') =~ /Let's Encrypt|ISRG/i) {
         $type="Let's Encrypt";
-    } elsif (($info{'issuer'} || '') =~ /ZeroSSL|GoGetSSL/i) {
-        $type='ZeroSSL';
     } else {
         $type='Certificate';
     }
 }
 my @domains=domains_for_vh();
 my $domain_text=join(', ',@domains);
+my $certbot_installed=certbot_path() ? 1 : 0;
 
 print <<'HTML';
 <style>
-.ols-ssl{max-width:1050px;margin:0 auto}.ols-ssl-hero{padding:28px 30px;border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:14px;margin-bottom:18px}.ols-kicker{font-size:11px;text-transform:uppercase;letter-spacing:.08em;opacity:.55;font-weight:700}.ols-ssl h1{margin:6px 0;font-size:29px}.ols-muted{opacity:.62;font-size:13px}.ols-card{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:12px;margin-bottom:16px;overflow:hidden}.ols-card h2{font-size:16px;margin:0;padding:16px 20px;border-bottom:1px solid var(--border-color,rgba(128,128,128,.16))}.ols-body{padding:18px 20px}.ols-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--border-color,rgba(128,128,128,.18));border:1px solid var(--border-color,rgba(128,128,128,.18));border-radius:9px;overflow:hidden}.ols-grid>div{padding:13px 15px;background:var(--body-bg,transparent);min-width:0}.ols-label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.06em;opacity:.52;margin-bottom:5px}.ols-value{font-size:13px;font-weight:600;word-break:break-word}.ols-badge{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(40,167,69,.13);color:#39a866;font-size:11px;font-weight:700}.ols-badge.off{background:rgba(128,128,128,.12);color:#888}.ols-actions{display:flex;gap:10px;flex-wrap:wrap}.ols-btn{display:inline-block;padding:10px 15px;border-radius:8px;text-decoration:none;border:1px solid var(--border-color,rgba(128,128,128,.25));font-weight:700;font-size:12px;color:inherit}.ols-btn:hover{background:rgba(128,128,128,.09)}.ols-form{display:grid;grid-template-columns:1fr 1fr;gap:14px}.ols-field label{display:block;font-size:11px;font-weight:700;margin-bottom:6px;opacity:.7}.ols-field input,.ols-field select{width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border-color,rgba(128,128,128,.28));border-radius:8px;background:transparent;color:inherit}.ols-wide{grid-column:1/-1}.ols-note{font-size:12px;opacity:.62}.ols-message{padding:13px 15px;border-radius:9px;margin-bottom:16px;white-space:pre-wrap}.ols-success{background:rgba(40,167,69,.1);border:1px solid rgba(40,167,69,.25)}.ols-error{background:rgba(220,53,69,.1);border:1px solid rgba(220,53,69,.25)}@media(max-width:700px){.ols-grid,.ols-form{grid-template-columns:1fr}.ols-wide{grid-column:auto}}
+.ols-ssl{max-width:1050px;margin:0 auto}.ols-ssl-hero{padding:28px 30px;border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:14px;margin-bottom:18px}.ols-kicker{font-size:11px;text-transform:uppercase;letter-spacing:.08em;opacity:.55;font-weight:700}.ols-ssl h1{margin:6px 0;font-size:29px}.ols-muted{opacity:.62;font-size:13px}.ols-card{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:12px;margin-bottom:16px;overflow:hidden}.ols-card h2{font-size:16px;margin:0;padding:16px 20px;border-bottom:1px solid var(--border-color,rgba(128,128,128,.16))}.ols-body{padding:18px 20px}.ols-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--border-color,rgba(128,128,128,.18));border:1px solid var(--border-color,rgba(128,128,128,.18));border-radius:9px;overflow:hidden}.ols-grid>div{padding:13px 15px;background:var(--body-bg,transparent);min-width:0}.ols-label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.06em;opacity:.52;margin-bottom:5px}.ols-value{font-size:13px;font-weight:600;word-break:break-word}.ols-badge{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(40,167,69,.13);color:#39a866;font-size:11px;font-weight:700}.ols-badge.off{background:rgba(128,128,128,.12);color:#888}.ols-actions{display:flex;gap:10px;flex-wrap:wrap}.ols-btn{display:inline-block;padding:10px 15px;border-radius:8px;text-decoration:none;border:1px solid var(--border-color,rgba(128,128,128,.25));font-weight:700;font-size:12px;color:inherit}.ols-btn:hover{background:rgba(128,128,128,.09)}.ols-form{display:grid;grid-template-columns:1fr 1fr;gap:14px}.ols-field label{display:block;font-size:11px;font-weight:700;margin-bottom:6px;opacity:.7}.ols-field input{width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border-color,rgba(128,128,128,.28));border-radius:8px;background:transparent;color:inherit}.ols-wide{grid-column:1/-1}.ols-note{font-size:12px;opacity:.62}.ols-message{padding:13px 15px;border-radius:9px;margin-bottom:16px;white-space:pre-wrap}.ols-success{background:rgba(40,167,69,.1);border:1px solid rgba(40,167,69,.25)}.ols-error{background:rgba(220,53,69,.1);border:1px solid rgba(220,53,69,.25)}@media(max-width:700px){.ols-grid,.ols-form{grid-template-columns:1fr}.ols-wide{grid-column:auto}}
 </style>
 HTML
 
 print "<div class='ols-ssl'>";
-print "<div class='ols-ssl-hero'><span class='ols-kicker'>SSL Certificate Manager</span><h1>".&html_escape($vh)."</h1><p class='ols-muted'>Manage self-signed certificates and ACME certificates for this virtual host.</p></div>";
-if ($message) { print "<div class='ols-message ols-success'>".&html_escape($message)."</div>"; }
-if ($error) { print "<div class='ols-message ols-error'>".&html_escape($error)."</div>"; }
+print "<div class='ols-ssl-hero'><span class='ols-kicker'>SSL Certificate Manager</span><h1>".&html_escape($vh)."</h1><p class='ols-muted'>Manage self-signed certificates and Let's Encrypt certificates for this virtual host.</p></div>";
+print "<div class='ols-message ols-success'>".&html_escape($message)."</div>" if $message;
+print "<div class='ols-message ols-error'>".&html_escape($error)."</div>" if $error;
 print "<section class='ols-card'><h2>Current Certificate</h2><div class='ols-body'><div class='ols-grid'>";
 print "<div><span class='ols-label'>Status</span><span class='ols-badge".($exists?'':' off')."'>".($exists?'Installed':'Not installed')."</span></div>";
 print "<div><span class='ols-label'>Certificate Type</span><span class='ols-value'>".&html_escape($type)."</span></div>";
@@ -218,8 +254,15 @@ print "<div><span class='ols-label'>Certificate</span><span class='ols-value'><c
 print "<div><span class='ols-label'>Private Key</span><span class='ols-value'><code>".&html_escape($privkey)."</code></span></div>";
 print "</div></div></section>";
 print "<section class='ols-card'><h2>Self-Signed Certificate</h2><div class='ols-body'><p class='ols-muted'>Generate a 2048-bit RSA SHA-256 self-signed certificate valid for 10 years using the virtual host domain and aliases as SANs.</p><div class='ols-actions'><a class='ols-btn' href='ssl.cgi?vh=".&urlize($vh)."&action=selfsigned'>Generate / Replace Self-Signed Certificate</a></div></div></section>";
-print "<section class='ols-card'><h2>ACME Certificate</h2><div class='ols-body'><form method='post' action='ssl.cgi'><input type='hidden' name='vh' value='".&quote_escape($vh)."'><input type='hidden' name='action' value='acme_issue'><div class='ols-form'><div class='ols-field'><label>Certificate Authority</label><select name='ca'><option value='letsencrypt'>Let's Encrypt</option><option value='zerossl'>ZeroSSL</option></select></div><div class='ols-field'><label>Account Email</label><input type='email' name='email' placeholder='you@example.com'></div><div class='ols-wide'><span class='ols-note'>Domains will be taken automatically from the virtual host configuration and validated through the website document root.</span></div><div class='ols-wide'><button class='ols-btn' type='submit'>Issue ACME Certificate</button></div></div></form></div></section>";
-print "<section class='ols-card'><h2>Renewal</h2><div class='ols-body'><p class='ols-muted'>Renew the existing ACME certificate using its configured certificate authority.</p><form method='post' action='ssl.cgi'><input type='hidden' name='vh' value='".&quote_escape($vh)."'><input type='hidden' name='action' value='renew'><div class='ols-form'><div class='ols-field'><label>Certificate Authority</label><select name='ca'><option value='letsencrypt'>Let's Encrypt</option><option value='zerossl'>ZeroSSL</option></select></div><div class='ols-field'><label>Account Email (ZeroSSL when required)</label><input type='email' name='email'></div><div class='ols-wide'><button class='ols-btn' type='submit'>Renew Certificate Now</button></div></div></form></div></section>";
+print "<section class='ols-card'><h2>Let's Encrypt</h2><div class='ols-body'>";
+if (!$certbot_installed) {
+    print "<p class='ols-muted'>Certbot is not installed. Install it from the SSL Dependencies page before requesting a Let's Encrypt certificate.</p>";
+    print "<div class='ols-actions'><a class='ols-btn' href='ssl-dependencies.cgi?vh=".&urlize($vh)."'>Open SSL Dependencies</a></div>";
+} else {
+    print "<form method='post' action='ssl.cgi'><input type='hidden' name='vh' value='".&quote_escape($vh)."'><input type='hidden' name='action' value='letsencrypt_issue'><div class='ols-form'><div class='ols-field'><label>Account Email</label><input type='email' name='email' placeholder='you@example.com' required></div><div class='ols-wide'><span class='ols-note'>Let's Encrypt will validate all domains configured for this virtual host through the website document root.</span></div><div class='ols-wide'><button class='ols-btn' type='submit'>Issue Let's Encrypt Certificate</button></div></div></form>";
+}
+print "</div></section>";
+print "<section class='ols-card'><h2>Renewal</h2><div class='ols-body'><p class='ols-muted'>Renew the existing Let's Encrypt certificate when it is due for renewal, then deploy the renewed files to OpenLiteSpeed.</p><form method='post' action='ssl.cgi'><input type='hidden' name='vh' value='".&quote_escape($vh)."'><input type='hidden' name='action' value='renew'><div class='ols-actions'><button class='ols-btn' type='submit'".($certbot_installed?'':' disabled').">Renew Let's Encrypt Certificate</button><a class='ols-btn' href='ssl-dependencies.cgi?vh=".&urlize($vh)."'>SSL Dependencies</a></div></form></div></section>";
 print "<p><a href='config.cgi?vh=".&urlize($vh)."&xnavigation=1#ssl'>← Back to SSL tab</a></p>";
 print "</div>";
 &ui_print_footer('');
