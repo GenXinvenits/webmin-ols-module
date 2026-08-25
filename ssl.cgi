@@ -116,36 +116,19 @@ sub deploy_certificate {
         return (0,"Unable to create OpenLiteSpeed certificate directory $cert_root: $!");
     }
 
-    # Keep deployment temporary files outside the OLS certificate tree.
-    # This also works when /tmp and /usr/local/lsws are different filesystems.
-    my $tmp = "/tmp/webmin-ols-deploy-$$";
-    return (0,"Unable to create temporary deployment directory $tmp: $!") unless mkdir($tmp,0700);
-    my $tmp_cert = "$tmp/fullchain.pem";
-    my $tmp_key  = "$tmp/privkey.pem";
+    # Deploy directly from Certbot's live lineage. The live files are symlinks
+    # to archive, so no additional temporary certificate directory is needed.
+    my ($ok,$why) = copy_file_checked($source_cert,$fullchain,0644);
+    return (0,$why) unless $ok;
 
-    my ($ok,$why) = copy_file_checked($source_cert,$tmp_cert,0644);
-    if (!$ok) { unlink($tmp_cert,$tmp_key); rmdir($tmp); return (0,$why); }
-    ($ok,$why) = copy_file_checked($source_key,$tmp_key,0600);
-    if (!$ok) { unlink($tmp_cert,$tmp_key); rmdir($tmp); return (0,$why); }
+    ($ok,$why) = copy_file_checked($source_key,$privkey,0600);
+    return (0,$why) unless $ok;
 
-    my ($ce,$co) = run_cmd('openssl x509 -in '.shell_quote($tmp_cert).' -noout');
-    if ($ce != 0) { unlink($tmp_cert,$tmp_key); rmdir($tmp); return (0,"The certificate copied successfully but OpenSSL could not read it.\n$co"); }
-    my ($ke,$ko) = run_cmd('openssl pkey -in '.shell_quote($tmp_key).' -noout');
-    if ($ke != 0) { unlink($tmp_cert,$tmp_key); rmdir($tmp); return (0,"The private key copied successfully but OpenSSL could not read it.\n$ko"); }
+    ($ok,$why) = copy_file_checked($fullchain,$cert,0644);
+    return (0,$why) unless $ok;
 
-    # Replace OLS files using copy, not rename: /tmp may be a different filesystem.
-    unlink($fullchain,$privkey,$cert,$chain);
-    ($ok,$why) = copy_file_checked($tmp_cert,$fullchain,0644);
-    if (!$ok) { unlink($tmp_cert,$tmp_key); rmdir($tmp); return (0,$why); }
-    ($ok,$why) = copy_file_checked($tmp_key,$privkey,0600);
-    if (!$ok) { unlink($tmp_cert,$tmp_key); rmdir($tmp); return (0,$why); }
-    return (0,"Unable to create $cert") unless system('/bin/cp','--',$fullchain,$cert) == 0;
-    return (0,"Unable to create $chain") unless system('/bin/cp','--',$fullchain,$chain) == 0;
-
-    chmod(0600,$privkey);
-    chmod(0644,$fullchain,$cert,$chain);
-    unlink($tmp_cert,$tmp_key);
-    rmdir($tmp);
+    ($ok,$why) = copy_file_checked($fullchain,$chain,0644);
+    return (0,$why) unless $ok;
 
     return (0,"Installed certificate is missing: $fullchain") unless -f $fullchain;
     return (0,"Installed private key is missing: $privkey") unless -f $privkey;
@@ -240,7 +223,6 @@ if ($in{'action'} eq 'selfsigned') {
                 chmod(0600,$archive_key);
                 chmod(0644,$archive_cert,$archive_chain,$archive_fullchain);
 
-                # Certbot-style lineage: live contains symlinks only.
                 unlink("$live_dir/privkey.pem","$live_dir/cert.pem","$live_dir/chain.pem","$live_dir/fullchain.pem");
                 symlink("../../archive/$vh/privkey${version}.pem", "$live_dir/privkey.pem");
                 symlink("../../archive/$vh/cert${version}.pem", "$live_dir/cert.pem");
