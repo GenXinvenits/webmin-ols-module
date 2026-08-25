@@ -86,6 +86,11 @@ sub remove_vhost_block {
     }
     return (join('',@out),$found);
 }
+sub normalize_vhost_spacing {
+    my ($text)=@_;
+    $text =~ s{(^[ \t]*\}[ \t]*\n)(?:[ \t]*\n)*(?=^[ \t]*virtualhost\s+\S+\s*\{)}{$1\n}gm;
+    return $text;
+}
 sub find_lsphp {
     my @paths; if (opendir(my $dh,$config{'lsws'})) { while(my $entry=readdir($dh)) { push @paths,"$config{'lsws'}/$entry/bin/lsphp" if $entry =~ /^lsphp[0-9.]+$/; } closedir($dh); }
     for my $p (sort {$b cmp $a} @paths) { return $p if -x $p; } return '';
@@ -166,7 +171,7 @@ elsif ($in{'action'} eq 'remove') {
     if (!$domain || !grep {$_ eq $domain} vhost_names($content)) { $error='The selected domain is not registered.'; }
     elsif ($in{'confirm_remove'} ne 'yes') { $error="Deletion of $domain is permanent and cannot be undone. Please confirm the deletion twice."; }
     else {
-        my ($new,$found)=remove_vhost_block($content,$domain); $new=remove_listener_maps($new,$domain);
+        my ($new,$found)=remove_vhost_block($content,$domain); $new=remove_listener_maps($new,$domain); $new=normalize_vhost_spacing($new);
         if ($found) {
             my ($ok,$out)=write_and_apply($content,$new);
             if ($ok) {
