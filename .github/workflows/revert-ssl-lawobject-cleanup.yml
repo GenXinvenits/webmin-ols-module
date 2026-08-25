@@ -1,0 +1,42 @@
+name: Revert unwanted SSL lawobject cleanup
+
+on:
+  push:
+    branches: [alpha]
+
+permissions:
+  contents: write
+
+jobs:
+  revert:
+    if: github.event.head_commit.message != 'Revert unwanted SSL lawobject cleanup applied'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove the unwanted cleanup injection from ssl.cgi
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('ssl.cgi')
+          s = p.read_text()
+          block = """<script>
+(function(){
+  function removeLawObjects(){
+    document.querySelectorAll('label.lawobject').forEach(function(el){el.remove();});
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',removeLawObjects); else removeLawObjects();
+  new MutationObserver(removeLawObjects).observe(document.documentElement,{childList:true,subtree:true});
+})();
+</script>
+"""
+          if block not in s:
+              raise SystemExit('The unwanted SSL lawobject cleanup block was not found; no change made.')
+          s = s.replace(block, '', 1)
+          p.write_text(s)
+          PY
+          rm -f .github/workflows/revert-ssl-lawobject-cleanup.yml
+          git config user.name 'GenXinvenits'
+          git config user.email 'genxinvenits@outlook.com'
+          git add ssl.cgi .github/workflows/revert-ssl-lawobject-cleanup.yml
+          git commit -m 'Revert unwanted SSL lawobject cleanup applied'
+          git push origin HEAD:alpha
