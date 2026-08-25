@@ -99,9 +99,12 @@ if ($php_path =~ m{(?:^|/)lsphp(\d)(\d)(?:/|$)}) { $php_version = "$1.$2"; }
 
 my $rewrite = ($content =~ /^\s*rewrite\s*\{/m) ? 'Enabled' : 'Disabled';
 my $htaccess = ($content =~ /autoLoadHtaccess\s+1/) ? 'Enabled' : 'Disabled';
-my $ssl_key = resolve_value(($content =~ /^\s*keyFile\s+(\S+)\s*$/m) ? $1 : '');
-my $ssl_cert = resolve_value(($content =~ /^\s*certFile\s+(\S+)\s*$/m) ? $1 : '');
-my $ssl = ($ssl_cert && $ssl_key && -e $ssl_cert && -e $ssl_key && -f $ssl_cert && -f $ssl_key) ? 'Enabled' : 'Disabled';
+my ($ssl_block) = $content =~ /\bvhssl\s*\{(.*?)\}/s;
+my $ssl_key = resolve_value(($ssl_block && $ssl_block =~ /^\s*keyFile\s+(\S+)\s*$/m) ? $1 : '');
+my $ssl_cert = resolve_value(($ssl_block && $ssl_block =~ /^\s*certFile\s+(\S+)\s*$/m) ? $1 : '');
+$ssl_cert = "$config{'lsws'}/cert/$vh/fullchain.pem" if !$ssl_cert;
+$ssl_key = "$config{'lsws'}/cert/$vh/privkey.pem" if !$ssl_key;
+my $ssl = (-e $ssl_cert && -e $ssl_key && -f $ssl_cert && -f $ssl_key) ? 'Enabled' : 'Disabled';
 my $cache = ($content =~ /^\s*module\s+cache\s*\{/m) ? 'Configured' : 'Not configured';
 my $access_log="$vh_root/logs/access.log"; my $error_log="$vh_root/logs/error.log";
 
