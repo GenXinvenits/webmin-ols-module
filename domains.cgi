@@ -222,8 +222,25 @@ if ($in{'action'} eq 'add') {
         my $public_html = "$vh_root/public_html";
         my $paths_ok = eval {
             make_path("$vh_root/conf", $public_html, "$vh_root/logs", "$vh_root/cgi-bin", "$public_html/.well-known/acme-challenge", "$vh_root/cachedata");
-            system('/bin/chown', '-R', 'www-data:www-data', $vh_root) == 0
-                or die "Unable to set domain ownership: $!";
+
+            # Domain root itself is not writable by the web server.
+            system('/bin/chown', 'root:nogroup', $vh_root) == 0 or die "Unable to set domain root ownership: $!";
+            system('/bin/chmod', '755', $vh_root) == 0 or die "Unable to set domain root permissions: $!";
+
+            # Web content and CGI are served/managed by www-data.
+            for my $path ($public_html, "$vh_root/cgi-bin", "$vh_root/cachedata") {
+                system('/bin/chown', '-R', 'www-data:www-data', $path) == 0 or die "Unable to set ownership for $path: $!";
+                system('/bin/chmod', '-R', '755', $path) == 0 or die "Unable to set permissions for $path: $!";
+            }
+
+            # Vhost configuration is controlled by LiteSpeed's admin account.
+            system('/bin/chown', '-R', 'lsadm:nogroup', "$vh_root/conf") == 0 or die "Unable to set configuration ownership: $!";
+            system('/bin/chmod', '-R', '755', "$vh_root/conf") == 0 or die "Unable to set configuration permissions: $!";
+
+            # Logs are root-owned and not writable by ordinary users.
+            system('/bin/chown', '-R', 'root:nogroup', "$vh_root/logs") == 0 or die "Unable to set log ownership: $!";
+            system('/bin/chmod', '-R', '750', "$vh_root/logs") == 0 or die "Unable to set log permissions: $!";
+
             1;
         };
         if (!$paths_ok) { $error = "Unable to create the domain directories: $@"; }
@@ -234,7 +251,14 @@ if ($in{'action'} eq 'add') {
             else {
                 my $fh;
                 if (!open($fh, '>', $vh_conf)) { $error = "Unable to create $vh_conf: $!"; }
-                else { print $fh $vh_config; close($fh); }
+                else {
+                    print $fh $vh_config;
+                    close($fh);
+                    if (system('/bin/chown', 'lsadm:nogroup', $vh_conf) != 0 || system('/bin/chmod', '755', $vh_conf) != 0) {
+                        unlink($vh_conf);
+                        $error = "Unable to set ownership or permissions on $vh_conf: $!";
+                    }
+                }
             }
             if (!$error) {
                 my $block = "\nvirtualhost $domain {\n    vhRoot $vh_root/\n    configFile $vh_conf\n    allowSymbolLink 1\n    enableScript 1\n    restrained 1\n}\n";
