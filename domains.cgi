@@ -60,10 +60,11 @@ sub build_template_aliases {
 }
 sub add_listener_maps {
     my ($text,$vh,$aliases)=@_;
-    my @maps = ("    map $vh $vh\n");
-    my %seen = (lc($vh) => 1);
+    my @maps;
+    my %seen;
     for my $alias (split(/\s+/,$aliases || '')) {
         next unless $alias;
+        next if lc($alias) eq lc($vh);
         next if $seen{lc($alias)}++;
         push @maps,"    map $vh $alias\n";
     }
