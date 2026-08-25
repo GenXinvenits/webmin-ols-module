@@ -1,0 +1,35 @@
+name: Fix domain root ownership
+
+on:
+  push:
+    branches: [testing]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.head_commit.message != 'Fix domain root ownership [final]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Change only the domain root ownership
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('domains.cgi')
+          s = p.read_text()
+          old = "system('/bin/chown','root:nogroup',$vh_root)==0 or die \"Unable to set domain root ownership: $!\";"
+          new = "system('/bin/chown','www-data:www-data',$vh_root)==0 or die \"Unable to set domain root ownership: $!\";"
+          if old not in s:
+              raise SystemExit('domain root ownership line not found')
+          if s.count(old) != 1:
+              raise SystemExit('unexpected number of domain root ownership lines')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git config user.name 'GenXinvenits'
+          git config user.email 'genxinvenits@outlook.com'
+          git add domains.cgi .github/workflows/fix-domain-root-ownership.yml
+          git rm .github/workflows/fix-domain-root-ownership.yml
+          git commit -m 'Fix domain root ownership [final]'
+          git push
