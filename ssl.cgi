@@ -100,28 +100,104 @@ sub backup_certificates {
     my $stamp = time();
     my $backup = "$cert_root/.webmin-backup-$stamp";
     return '' if !-d $cert_root && !-f $fullchain && !-f $privkey;
-    mkdir($cert_root) if !-d $cert_root;
-    mkdir($backup) if !-d $backup;
+    if (!-d $cert_root && !mkdir($cert_root,0755)) {
+        return '';
+    }
+    if (!mkdir($backup,0755) && !-d $backup) {
+        return '';
+    }
     for my $f ($fullchain,$privkey,$cert,$chain) {
-        next unless -f $f;
+        next unless -f $f || -l $f;
         my ($name) = $f =~ m{/([^/]+)$};
-        system('/bin/cp','-a',$f,"$backup/$name") == 0 or return '';
+        next unless $name;
+        my $src = $f;
+        my $dst = "$backup/$name";
+        return '' unless system('/bin/cp','-a',$src,$dst) == 0;
     }
     return $backup;
 }
 
+sub copy_file_checked {
+    my ($src,$dst,$mode) = @_;
+    return (0,"Source file does not exist: $src") unless -f $src;
+    unlink($dst) if -l $dst;
+    return (0,"Unable to remove existing destination: $dst") if -e $dst && !unlink($dst);
+    return (0,"Unable to copy $src to $dst") unless system('/bin/cp','--',$src,$dst) == 0;
+    return (0,"Copied file is missing after copy: $dst") unless -f $dst;
+    chmod($mode,$dst) or return (0,"Unable to set permissions on $dst: $!");
+    return (1,'');
+}
+
 sub deploy_certificate {
     my ($source_cert,$source_key) = @_;
-    return 0 unless -f $source_cert && -f $source_key;
-    mkdir($cert_root) if !-d $cert_root;
-    backup_certificates();
-    return 0 unless system('/bin/cp','-f',$source_cert,$fullchain) == 0;
-    return 0 unless system('/bin/cp','-f',$source_key,$privkey) == 0;
-    system('/bin/cp','-f',$fullchain,$cert) == 0 or return 0;
-    system('/bin/cp','-f',$fullchain,$chain) == 0 or return 0;
+
+    return (0,"Certificate source does not exist: $source_cert") unless -f $source_cert;
+    return (0,"Private key source does not exist: $source_key") unless -f $source_key;
+
+    if (!-d $cert_root && !mkdir($cert_root,0755)) {
+        return (0,"Unable to create OpenLiteSpeed certificate directory $cert_root: $!");
+    }
+
+    my $backup = backup_certificates();
+    return (0,"Unable to create a backup of the existing certificate files in $cert_root")
+        if (-f $fullchain || -f $privkey || -f $cert || -f $chain) && !$backup;
+
+    # Copy to temporary files first. This avoids leaving a half-installed
+    # certificate/key pair if one of the copies fails.
+    my $tmp_cert = "$cert_root/.webmin-fullchain-$$.pem";
+    my $tmp_key  = "$cert_root/.webmin-privkey-$$.pem";
+
+    unlink($tmp_cert,$tmp_key);
+
+    my ($ok,$why) = copy_file_checked($source_cert,$tmp_cert,0644);
+    if (!$ok) {
+        unlink($tmp_cert,$tmp_key);
+        return (0,$why);
+    }
+
+    ($ok,$why) = copy_file_checked($source_key,$tmp_key,0600);
+    if (!$ok) {
+        unlink($tmp_cert,$tmp_key);
+        return (0,$why);
+    }
+
+    # Validate the certificate and ensure the private key is readable before
+    # replacing the live OpenLiteSpeed files.
+    my ($ce,$co) = run_cmd('openssl x509 -in '.shell_quote($tmp_cert).' -noout');
+    if ($ce != 0) {
+        unlink($tmp_cert,$tmp_key);
+        return (0,"The certificate copied successfully but OpenSSL could not read it.\n$co");
+    }
+
+    my ($ke,$ko) = run_cmd('openssl pkey -in '.shell_quote($tmp_key).' -noout');
+    if ($ke != 0) {
+        unlink($tmp_cert,$tmp_key);
+        return (0,"The private key copied successfully but OpenSSL could not read it.\n$ko");
+    }
+
+    # Install the certificate and key. Remove stale symlinks first so the
+    # destination is always a real file owned by the Webmin/OLS deployment.
+    for my $dst ($fullchain,$privkey,$cert,$chain) {
+        unlink($dst) if -l $dst;
+    }
+
+    unlink($fullchain,$privkey,$cert,$chain);
+
+    return (0,"Unable to install $tmp_cert as $fullchain") unless rename($tmp_cert,$fullchain);
+    return (0,"Unable to install $tmp_key as $privkey") unless rename($tmp_key,$privkey);
+
+    # cert.pem and chain.pem are intentionally copies of fullchain.pem for
+    # compatibility with the existing OLS module configuration.
+    return (0,"Unable to create $cert") unless system('/bin/cp','--',$fullchain,$cert) == 0;
+    return (0,"Unable to create $chain") unless system('/bin/cp','--',$fullchain,$chain) == 0;
+
     chmod(0600,$privkey);
-    chmod(0644,$cert,$chain,$fullchain);
-    return 1;
+    chmod(0644,$fullchain,$cert,$chain);
+
+    return (0,"Installed certificate is missing: $fullchain") unless -f $fullchain;
+    return (0,"Installed private key is missing: $privkey") unless -f $privkey;
+
+    return (1,'');
 }
 
 sub validate_and_restart {
@@ -219,7 +295,8 @@ if ($in{'action'} eq 'selfsigned') {
                 symlink("../../archive/$vh/fullchain${version}.pem", "$live_dir/fullchain.pem");
                 write_certbot_readme($live_dir);
 
-                if (deploy_certificate($live_dir.'/fullchain.pem',$live_dir.'/privkey.pem')) {
+                my ($de,$do)=deploy_certificate($live_dir.'/fullchain.pem',$live_dir.'/privkey.pem');
+                if ($de) {
                     my ($ok,$out)=validate_and_restart();
                     if ($ok) {
                         $message="Self-signed certificate generated as version $version, Certbot-style lineage updated, deployed and OpenLiteSpeed restarted successfully.";
@@ -227,7 +304,7 @@ if ($in{'action'} eq 'selfsigned') {
                         $error=$out;
                     }
                 } else {
-                    $error='Certificate lineage was created, but the certificate could not be deployed to OpenLiteSpeed.';
+                    $error="Certificate lineage was created, but the certificate could not be deployed to OpenLiteSpeed.\n$do";
                 }
             } else {
                 $error='Unable to store the generated certificate lineage in /etc/letsencrypt/archive/'.$vh.'.';
@@ -273,12 +350,13 @@ if ($in{'action'} eq 'letsencrypt_issue' || $in{'action'} eq 'renew') {
             my $source_root = "/etc/letsencrypt/live/$cert_name";
             my $source_cert = "$source_root/fullchain.pem";
             my $source_key = "$source_root/privkey.pem";
-            if (deploy_certificate($source_cert,$source_key)) {
+            my ($de,$do)=deploy_certificate($source_cert,$source_key);
+            if ($de) {
                 my ($valid,$vo)=validate_and_restart();
                 if ($valid) {
                     $message=$in{'action'} eq 'renew' ? "Let's Encrypt certificate renewed/deployed and OpenLiteSpeed restarted successfully." : "Let's Encrypt certificate issued/deployed and OpenLiteSpeed restarted successfully.";
                 } else { $error=$vo; }
-            } else { $error="Certbot completed successfully, but the certificate could not be deployed from $source_root."; }
+            } else { $error="Certbot completed successfully, but the certificate could not be deployed from $source_root.\n$do"; }
         } else { $error="Let's Encrypt operation failed.\n$o"; }
     }
 }
