@@ -1,4 +1,4 @@
-name: Revert unwanted SSL lawobject cleanup
+name: Fix SSL uninstall cross-device removal
 
 on:
   push:
@@ -8,35 +8,77 @@ permissions:
   contents: write
 
 jobs:
-  revert:
-    if: github.event.head_commit.message != 'Revert unwanted SSL lawobject cleanup applied'
+  fix:
+    if: github.event.head_commit.message != 'Fix SSL uninstall cross-device removal applied'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Remove the unwanted cleanup injection from ssl.cgi
+      - name: Fix remove_lineage backup location
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
+
           p = Path('ssl.cgi')
           s = p.read_text()
-          block = """<script>
-(function(){
-  function removeLawObjects(){
-    document.querySelectorAll('label.lawobject').forEach(function(el){el.remove();});
-  }
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',removeLawObjects); else removeLawObjects();
-  new MutationObserver(removeLawObjects).observe(document.documentElement,{childList:true,subtree:true});
-})();
-</script>
-"""
-          if block not in s:
-              raise SystemExit('The unwanted SSL lawobject cleanup block was not found; no change made.')
-          s = s.replace(block, '', 1)
-          p.write_text(s)
+
+          pattern = r"sub remove_lineage \{.*?\n\}\n\nif \(\$in\{'action'\} eq 'selfsigned'\) \{"
+          replacement = r'''sub remove_lineage {
+    my $base_dir = '/etc/letsencrypt';
+    my $archive_dir = "$base_dir/archive/$vh";
+    my $live_dir = "$base_dir/live/$vh";
+    return (1,'') unless -d $archive_dir || -d $live_dir;
+
+    # Keep the temporary backup on the same filesystem as /etc/letsencrypt.
+    # /tmp may be a different filesystem, which makes rename() fail with
+    # "Invalid cross-device link".
+    my $backup_root = "$base_dir/.webmin-ols-remove-$vh-" . time() . "-$$";
+    mkdir($backup_root) or return (0,"Unable to create temporary SSL removal backup: $!");
+
+    my $archive_backup = "$backup_root/archive";
+    my $live_backup = "$backup_root/live";
+    my $moved_archive = 0;
+    my $moved_live = 0;
+
+    if (-d $archive_dir) {
+        if (rename($archive_dir,$archive_backup)) { $moved_archive=1; }
+        else {
+            rmdir($backup_root);
+            return (0,"Unable to move the certificate archive out of the way: $!");
+        }
+    }
+
+    if (-d $live_dir) {
+        if (rename($live_dir,$live_backup)) { $moved_live=1; }
+        else {
+            rename($archive_backup,$archive_dir) if $moved_archive;
+            rmdir($backup_root);
+            return (0,"Unable to move the live certificate directory out of the way: $!");
+        }
+    }
+
+    my ($valid,$out)=validate_and_restart();
+    if (!$valid) {
+        rename($live_backup,$live_dir) if $moved_live;
+        rename($archive_backup,$archive_dir) if $moved_archive;
+        rmdir($backup_root);
+        return (0,"SSL removal was rolled back because OpenLiteSpeed could not validate/restart.\n$out");
+    }
+
+    system('/bin/rm','-rf',$backup_root);
+    return (1,'');
+}
+
+if ($in{'action'} eq 'selfsigned') {'''
+
+          s2, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
+          if n != 1:
+              raise SystemExit('remove_lineage function was not found; no change made.')
+          p.write_text(s2)
           PY
           rm -f .github/workflows/revert-ssl-lawobject-cleanup.yml
           git config user.name 'GenXinvenits'
           git config user.email 'genxinvenits@outlook.com'
           git add ssl.cgi .github/workflows/revert-ssl-lawobject-cleanup.yml
-          git commit -m 'Revert unwanted SSL lawobject cleanup applied'
+          git commit -m 'Fix SSL uninstall cross-device removal applied'
           git push origin HEAD:alpha
