@@ -73,20 +73,6 @@ sub install_packages {
     else { return (1,'Unsupported package manager.'); }
     return run_cmd($cmd);
 }
-sub acme_path {
-    for my $candidate (
-        '/root/.acme.sh/acme.sh',
-        '/usr/local/bin/acme.sh',
-        '/usr/bin/acme.sh',
-        (($ENV{'HOME'} || '/root').'/ .acme.sh/acme.sh')
-    ) {
-        $candidate =~ s{/ }{/}g;
-        return $candidate if -x $candidate;
-    }
-    my ($e,$o)=run_cmd('command -v acme.sh');
-    if (!$e && $o =~ /(\/[^\s]+\/acme\.sh)/) { return $1; }
-    return '';
-}
 
 my %d=distro_info();
 my $pm=package_manager();
@@ -94,36 +80,17 @@ my $message='';
 my $error='';
 
 if ($in{'action'} eq 'install_packages') {
-    my @needed=grep {!pkg_installed($_,$pm)} qw(openssl curl socat);
+    my @needed=grep {!pkg_installed($_,$pm)} qw(openssl certbot);
     if (@needed) {
         my ($e,$o)=install_packages($pm,@needed);
-        $e ? ($error="Package installation failed.\n$o") : ($message='Required SSL packages installed successfully.');
+        $e ? ($error="Package installation failed.\n$o") : ($message='Required SSL packages and Certbot were installed successfully.');
     } else {
-        $message='All required system packages are already installed.';
+        $message='OpenSSL and Certbot are already installed.';
     }
 }
 
-if ($in{'action'} eq 'install_acme') {
-    if (!command_exists('curl')) {
-        $error='curl is required before acme.sh can be installed.';
-    } elsif (acme_path()) {
-        $message='acme.sh is already installed.';
-    } else {
-        my $home='/root';
-        my ($e,$o)=run_cmd("export HOME=/root; curl -fsSL https://get.acme.sh | sh");
-        if (!$e && acme_path()) {
-            $message='acme.sh installed successfully.';
-        } elsif (!$e) {
-            $message='acme.sh installation completed. Refresh the page to verify the installation.';
-        } else {
-            $error="acme.sh installation failed.\n$o";
-        }
-    }
-}
-
-my $acme=acme_path();
 my @pkg_rows;
-for my $pkg ('openssl','curl','socat') {
+for my $pkg ('openssl','certbot') {
     push @pkg_rows, [$pkg,pkg_installed($pkg,$pm)];
 }
 my $missing=grep {!$_->[1]} @pkg_rows;
@@ -139,24 +106,20 @@ print <<'HTML';
 HTML
 
 print "<div class='ols-deps'>";
-print "<div class='ols-hero'><span class='ols-kicker'>SSL System Requirements</span><h1>Dependencies</h1><p class='ols-muted'>The module checks the operating system before enabling certificate operations. Missing packages can be installed from the detected package manager.</p></div>";
+print "<div class='ols-hero'><span class='ols-kicker'>SSL System Requirements</span><h1>Dependencies</h1><p class='ols-muted'>The module checks the operating system before enabling certificate operations. Certbot is used for Let's Encrypt certificates.</p></div>";
 print "<div class='ols-message ols-success'>".esc($message)."</div>" if $message;
 print "<div class='ols-message ols-error'>".esc($error)."</div>" if $error;
-
 print "<section class='ols-card'><h2>System packages</h2><div class='ols-body'>";
 for my $r (@pkg_rows) {
-    print "<div class='ols-row'><div><div class='ols-name'>".esc($r->[0])."</div><div class='ols-desc'>Required for certificate generation, inspection or ACME support.</div></div><div class='".($r->[1]?'ols-ok':'ols-missing')."'>".($r->[1]?'Installed':'Missing')."</div></div>";
+    my $desc = $r->[0] eq 'certbot' ? "Certbot client used to obtain and renew Let's Encrypt certificates." : 'OpenSSL is required for certificate inspection and self-signed certificate generation.';
+    print "<div class='ols-row'><div><div class='ols-name'>".esc($r->[0])."</div><div class='ols-desc'>".esc($desc)."</div></div><div class='".($r->[1]?'ols-ok':'ols-missing')."'>".($r->[1]?'Installed':'Missing')."</div></div>";
 }
 print "</div></section>";
-
-print "<section class='ols-card'><h2>ACME client</h2><div class='ols-body'>";
-print "<div class='ols-row'><div><div class='ols-name'>acme.sh</div><div class='ols-desc'>Used for Let's Encrypt and ZeroSSL certificate issuance and renewal.</div></div><div class='".($acme?'ols-ok':'ols-missing')."'>".($acme?'Installed':'Not installed')."</div></div>";
-print "<p class='ols-muted'>Let's Encrypt and ZeroSSL do not require separate distro packages when acme.sh is used as the ACME client.</p>";
-print "<a class='ols-btn primary' href='ssl-dependencies.cgi?action=install_packages".($vh?'&vh='.&urlize($vh):'')."'>Install missing packages</a> " if $missing;
-print "<a class='ols-btn primary' href='ssl-dependencies.cgi?action=install_acme".($vh?'&vh='.&urlize($vh):'')."'>Install acme.sh</a>" if !$acme && !$missing;
-print "<a class='ols-btn' href='ssl-dependencies.cgi".($vh?'?vh='.&urlize($vh):'')."'>Refresh status</a>" if $acme || !$missing;
+print "<section class='ols-card'><h2>Let's Encrypt</h2><div class='ols-body'><div class='ols-row'><div><div class='ols-name'>Certbot</div><div class='ols-desc'>The official Let's Encrypt client used by the SSL Certificate Manager for issuance and renewal.</div></div><div class='".(pkg_installed('certbot',$pm)?'ols-ok':'ols-missing')."'>".(pkg_installed('certbot',$pm)?'Ready':'Not installed')."</div></div>";
+print "<p class='ols-muted'>The SSL manager uses the Certbot webroot authenticator. No acme.sh installation or account is required.</p>";
+print "<a class='ols-btn primary' href='ssl-dependencies.cgi?action=install_packages".($vh?'&vh='.&urlize($vh):'')."'>Install missing packages</a>" if $missing;
+print "<a class='ols-btn' href='ssl-dependencies.cgi".($vh?'?vh='.&urlize($vh):'')."'>Refresh status</a>";
 print "</div></section>";
-
 print "<section class='ols-card'><h2>Detected system</h2><div class='ols-body'><div class='ols-row'><div class='ols-name'>Distribution</div><div>".esc($d{'PRETTY_NAME'} || $d{'NAME'} || 'Unknown')."</div></div><div class='ols-row'><div class='ols-name'>Package manager</div><div>".esc($pm || 'Not detected')."</div></div></div></section>";
 print "<p><a href='".&html_escape($back)."'>← Back to SSL</a></p></div>";
 &ui_print_footer('');
