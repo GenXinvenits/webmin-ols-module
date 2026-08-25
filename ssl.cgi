@@ -96,43 +96,26 @@ sub domains_for_vh {
     return grep {!$seen{$_}++} @domains;
 }
 
-sub copy_file_checked {
-    my ($src,$dst,$mode) = @_;
-    return (0,"Source file does not exist: $src") unless -f $src;
-    unlink($dst) if -l $dst;
-    return (0,"Unable to remove existing destination: $dst") if -e $dst && !unlink($dst);
-    return (0,"Unable to copy $src to $dst") unless system('/bin/cp','--',$src,$dst) == 0;
-    return (0,"Copied file is missing after copy: $dst") unless -f $dst;
-    chmod($mode,$dst) or return (0,"Unable to set permissions on $dst: $!");
-    return (1,'');
-}
-
+# /usr/local/lsws/cert is a symlink to /etc/letsencrypt/live.
+# The live files themselves are the Certbot-style symlinks to archive.
+# Nothing is copied into a second certificate directory.
 sub deploy_certificate {
     my ($source_cert,$source_key) = @_;
-    return (0,"Certificate source does not exist: $source_cert") unless -f $source_cert;
-    return (0,"Private key source does not exist: $source_key") unless -f $source_key;
+    return (0, "Certificate source does not exist: $source_cert") unless -f $source_cert;
+    return (0, "Private key source does not exist: $source_key") unless -f $source_key;
 
-    if (!-d $cert_root && !mkdir($cert_root,0755)) {
-        return (0,"Unable to create OpenLiteSpeed certificate directory $cert_root: $!");
-    }
+    my ($ce,$co) = run_cmd('openssl x509 -in '.shell_quote($source_cert).' -noout');
+    return (0, "Unable to read certificate $source_cert.\n$co") if $ce != 0;
 
-    # Deploy directly from Certbot's live lineage. The live files are symlinks
-    # to archive, so no additional temporary certificate directory is needed.
-    my ($ok,$why) = copy_file_checked($source_cert,$fullchain,0644);
-    return (0,$why) unless $ok;
+    my ($ke,$ko) = run_cmd('openssl pkey -in '.shell_quote($source_key).' -noout');
+    return (0, "Unable to read private key $source_key.\n$ko") if $ke != 0;
 
-    ($ok,$why) = copy_file_checked($source_key,$privkey,0600);
-    return (0,$why) unless $ok;
+    return (0, "Certificate path is not a symlink: $source_cert") unless -l $source_cert;
+    return (0, "Private key path is not a symlink: $source_key") unless -l $source_key;
 
-    ($ok,$why) = copy_file_checked($fullchain,$cert,0644);
-    return (0,$why) unless $ok;
-
-    ($ok,$why) = copy_file_checked($fullchain,$chain,0644);
-    return (0,$why) unless $ok;
-
-    return (0,"Installed certificate is missing: $fullchain") unless -f $fullchain;
-    return (0,"Installed private key is missing: $privkey") unless -f $privkey;
-    return (1,'');
+    return (0, "OpenLiteSpeed certificate path is missing: $fullchain") unless -e $fullchain;
+    return (0, "OpenLiteSpeed private key path is missing: $privkey") unless -e $privkey;
+    return (1, '');
 }
 
 sub validate_and_restart {
@@ -234,7 +217,7 @@ if ($in{'action'} eq 'selfsigned') {
                 if ($de) {
                     my ($ok,$out)=validate_and_restart();
                     if ($ok) {
-                        $message="Self-signed certificate generated as version $version, Certbot-style lineage updated, deployed and OpenLiteSpeed restarted successfully.";
+                        $message="Self-signed certificate generated as version $version, Certbot-style lineage updated and OpenLiteSpeed restarted successfully.";
                     } else {
                         $error=$out;
                     }
@@ -289,9 +272,9 @@ if ($in{'action'} eq 'letsencrypt_issue' || $in{'action'} eq 'renew') {
             if ($de) {
                 my ($valid,$vo)=validate_and_restart();
                 if ($valid) {
-                    $message=$in{'action'} eq 'renew' ? "Let's Encrypt certificate renewed/deployed and OpenLiteSpeed restarted successfully." : "Let's Encrypt certificate issued/deployed and OpenLiteSpeed restarted successfully.";
+                    $message=$in{'action'} eq 'renew' ? "Let's Encrypt certificate renewed and OpenLiteSpeed restarted successfully." : "Let's Encrypt certificate issued and OpenLiteSpeed restarted successfully.";
                 } else { $error=$vo; }
-            } else { $error="Certbot completed successfully, but the certificate could not be deployed from $source_root.\n$do"; }
+            } else { $error="Certbot completed successfully, but the certificate lineage could not be used by OpenLiteSpeed.\n$do"; }
         } else { $error="Let's Encrypt operation failed.\n$o"; }
     }
 }
@@ -340,7 +323,7 @@ if (!$certbot_installed) {
 }
 print "</div></div><div class='ols-actions' style='margin-top:14px'><button class='ols-btn primary' id='ssl-submit' type='submit'>".($default_type eq 'letsencrypt' ? "Issue Let's Encrypt Certificate" : 'Generate / Replace Self-Signed Certificate')."</button></div></form></div></section>";
 
-print "<section class='ols-card'><h2>Renewal</h2><div class='ols-body'><p class='ols-muted'>Renew the existing Let's Encrypt certificate when it is due for renewal, then deploy the renewed files to OpenLiteSpeed.</p><form method='post' action='ssl.cgi'><input type='hidden' name='vh' value='".&quote_escape($vh)."'><input type='hidden' name='action' value='renew'><div class='ols-actions'><button class='ols-btn primary' type='submit'".($certbot_installed?'':' disabled').">Renew Let's Encrypt Certificate</button><a class='ols-btn' href='ssl-dependencies.cgi?vh=".&urlize($vh)."'>SSL Dependencies</a></div></form></div></section>";
+print "<section class='ols-card'><h2>Renewal</h2><div class='ols-body'><p class='ols-muted'>Renew the existing Let's Encrypt certificate when it is due for renewal.</p><form method='post' action='ssl.cgi'><input type='hidden' name='vh' value='".&quote_escape($vh)."'><input type='hidden' name='action' value='renew'><div class='ols-actions'><button class='ols-btn primary' type='submit'".($certbot_installed?'':' disabled').">Renew Let's Encrypt Certificate</button><a class='ols-btn' href='ssl-dependencies.cgi?vh=".&urlize($vh)."'>SSL Dependencies</a></div></form></div></section>";
 print "<p><a href='config.cgi?vh=".&urlize($vh)."&xnavigation=1#ssl'>← Back to SSL tab</a></p>";
 print "</div>";
 
