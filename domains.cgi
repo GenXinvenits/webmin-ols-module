@@ -54,7 +54,7 @@ sub build_aliases {
 }
 sub build_template_aliases {
     my ($domain,$prefixes)=@_; my @aliases; my %seen;
-    if ($domain =~ /^[^.]+\.[^.]+$/) { push @aliases,'www.\$VH_NAME'; $seen{'www'}=1; }
+    if ($domain =~ /^[^.]+\.[^.]+$/) { push @aliases,'www.$VH_NAME'; $seen{'www'}=1; }
     for my $prefix (split(/[,\s]+/, $prefixes || '')) { next unless $prefix; $prefix=lc($prefix); next if $seen{$prefix}++; push @aliases,"$prefix.\$VH_NAME"; }
     return join(' ',@aliases);
 }
