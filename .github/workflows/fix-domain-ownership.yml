@@ -1,0 +1,68 @@
+name: Apply domain ownership fix
+
+on:
+  push:
+    branches: [testing]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.head_commit.message != 'Apply domain ownership fix [final]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fix domains.cgi ownership handling
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('domains.cgi')
+          s = p.read_text()
+          old = '''            make_path("$vh_root/conf", $public_html, "$vh_root/logs", "$vh_root/cgi-bin", "$public_html/.well-known/acme-challenge", "$vh_root/cachedata");
+            system('/bin/chown', '-R', 'www-data:www-data', $vh_root) == 0
+                or die "Unable to set domain ownership: $!";
+            1;'''
+          new = '''            make_path("$vh_root/conf", "$vh_root/logs", "$vh_root/cgi-bin", "$public_html/.well-known/acme-challenge", "$vh_root/cachedata", $public_html);
+            system('/bin/chown', '-R', 'www-data:www-data', $public_html) == 0
+                or die "Unable to set public_html ownership: $!";
+            system('/bin/chown', '-R', 'www-data:www-data', "$vh_root/cgi-bin") == 0
+                or die "Unable to set cgi-bin ownership: $!";
+            system('/bin/chown', 'www-data:www-data', $vh_root) == 0
+                or die "Unable to set domain root ownership: $!";
+            system('/bin/chown', '-R', 'lsadm:nogroup', "$vh_root/conf") == 0
+                or die "Unable to set configuration ownership: $!";
+            system('/bin/chmod', '-R', '755', "$vh_root/conf") == 0
+                or die "Unable to set configuration permissions: $!";
+            system('/bin/chown', '-R', 'root:nogroup', "$vh_root/logs") == 0
+                or die "Unable to set log ownership: $!";
+            system('/bin/chmod', '-R', '750', "$vh_root/logs") == 0
+                or die "Unable to set log permissions: $!";
+            system('/bin/chown', '-R', 'www-data:www-data', "$vh_root/cachedata") == 0
+                or die "Unable to set cache ownership: $!";
+            system('/bin/chmod', '-R', '755', "$vh_root/cachedata") == 0
+                or die "Unable to set cache permissions: $!";
+            1;'''
+          if old not in s:
+              raise SystemExit('ownership block not found')
+          s = s.replace(old, new, 1)
+          old = '''                else { print $fh $vh_config; close($fh); }'''
+          new = '''                else {
+                    print $fh $vh_config;
+                    close($fh);
+                    chmod(0755, $vh_conf) or $error = "Unable to set configuration permissions: $!";
+                    if (!$error && system('/bin/chown', 'lsadm:nogroup', $vh_conf) != 0) {
+                        $error = "Unable to set configuration ownership: $!";
+                    }
+                }'''
+          if old not in s:
+              raise SystemExit('config write block not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          rm -f .github/workflows/fix-domain-ownership.yml
+          git config user.name 'GenXinvenits'
+          git config user.email 'genxinvenits@outlook.com'
+          git add domains.cgi .github/workflows/fix-domain-ownership.yml
+          git commit -m 'Apply domain ownership fix [final]'
+          git push
