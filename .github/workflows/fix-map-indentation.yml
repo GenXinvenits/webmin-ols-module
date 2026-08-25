@@ -1,0 +1,36 @@
+name: Fix listener map indentation
+
+on:
+  push:
+    branches: [alpha]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.head_commit.message != 'Fix listener map indentation [final]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fix map indentation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('domains.cgi')
+          s = p.read_text()
+          old1 = 'push @maps, "map                     $vh $vh\\n";'
+          new1 = 'push @maps, "  map                     $vh $vh\\n";'
+          old2 = 'push @maps,"map                     $vh $alias\\n";'
+          new2 = 'push @maps,"  map                     $vh $alias\\n";'
+          if old1 not in s or old2 not in s:
+              raise SystemExit('listener map generation block not found')
+          s = s.replace(old1, new1, 1).replace(old2, new2, 1)
+          p.write_text(s)
+          PY
+          rm -f .github/workflows/fix-map-indentation.yml
+          git config user.name 'GenXinvenits'
+          git config user.email 'genxinvenits@outlook.com'
+          git add domains.cgi .github/workflows/fix-map-indentation.yml
+          git commit -m 'Fix listener map indentation [final]'
+          git push
