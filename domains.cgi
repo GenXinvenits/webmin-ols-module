@@ -79,6 +79,19 @@ sub build_aliases {
     return join(' ', @aliases);
 }
 
+sub build_template_aliases {
+    my ($prefixes) = @_;
+    my @aliases = ('www.\$VH_NAME');
+    my %seen = ('www' => 1);
+    for my $prefix (split(/[,\s]+/, $prefixes || '')) {
+        next unless $prefix;
+        $prefix = lc($prefix);
+        next if $seen{$prefix}++;
+        push @aliases, "$prefix.\$VH_NAME";
+    }
+    return join(' ', @aliases);
+}
+
 sub add_listener_maps {
     my ($text, $vh, $aliases) = @_;
     my @maps;
@@ -142,7 +155,7 @@ sub load_vh_template {
 }
 
 sub build_vhconf {
-    my ($domain, $aliases) = @_;
+    my ($domain, $aliases, $alias_prefixes) = @_;
     my ($template_ok, $template) = load_vh_template();
     return '' unless $template_ok;
     my $lsphp = find_lsphp();
@@ -179,7 +192,7 @@ extprocessor www-data {
 }
 PHP
     }
-    my $alias_line = $aliases ? "vhAliases                        $aliases\n" : '';
+    my $alias_line = "vhAliases                        " . build_template_aliases($alias_prefixes) . "\n";
     $template =~ s/__DOMAIN__/$domain/g;
     $template =~ s/__VH_ALIASES_LINE__/$alias_line/;
     $template =~ s/__PHP_CONFIG__/$php/;
@@ -208,7 +221,7 @@ if ($in{'action'} eq 'add') {
         if (!$paths_ok) { $error = "Unable to create the domain directories: $@"; }
         elsif (-e $vh_conf) { $error = "The virtual host configuration already exists: $vh_conf"; }
         else {
-            my $vh_config = build_vhconf($domain, $aliases);
+            my $vh_config = build_vhconf($domain, $aliases, $alias_prefixes);
             if (!$vh_config) { $error = 'Unable to build the virtual host configuration from the module template.'; }
             else {
                 my $fh;
@@ -226,50 +239,45 @@ if ($in{'action'} eq 'add') {
     }
 }
 elsif ($in{'action'} eq 'remove') {
-    my $domain = $in{'domain'} || ''; $domain =~ s/[^A-Za-z0-9._-]//g;
-    if (!$domain || !grep { $_ eq $domain } vhost_names($content)) { $error = 'The selected domain is not registered.'; }
-    else {
+    my $domain = $in{'domain'} || '';
+    $domain =~ s/[^A-Za-z0-9._-]//g;
+    if (!$domain || !grep { $_ eq $domain } vhost_names($content)) {
+        $error = 'The selected domain is not registered.';
+    } else {
         my ($new,$found) = remove_vhost_block($content,$domain);
         $new = remove_listener_maps($new,$domain);
         if ($found) {
             my ($ok,$out) = write_and_apply($content,$new);
             if ($ok) {
-                my $vh_root = "$domain_base/$domain";
-                my $vh_conf = "$vh_root/conf/vhconf.conf";
-                my $cert_archive = "/etc/letsencrypt/archive/$domain";
-                my $cert_live = "/etc/letsencrypt/live/$domain";
-                my @cleanup_errors;
-
+                my $vh_conf = "$domain_base/$domain/conf/vhconf.conf";
                 unlink($vh_conf) if -f $vh_conf;
-
+                my $vh_root = "$domain_base/$domain";
+                my @cleanup_errors;
                 if (-d $vh_root) {
                     eval {
-                        my $tree_errors;
-                        remove_tree($vh_root, { error => \$tree_errors });
-                        if ($tree_errors && @$tree_errors) {
-                            push @cleanup_errors, "Unable to completely remove domain directory $vh_root";
-                        }
+                        my $errors;
+                        remove_tree($vh_root, { error => \$errors });
+                        push @cleanup_errors, "Unable to remove domain directory $vh_root" if $errors && @$errors;
                     };
                     push @cleanup_errors, "Unable to remove domain directory $vh_root: $@" if $@;
                 }
-
+                my $cert_archive = "/etc/letsencrypt/archive/$domain";
+                my $cert_live = "/etc/letsencrypt/live/$domain";
                 for my $cert_dir ($cert_archive, $cert_live) {
-                    next unless -e $cert_dir || -l $cert_dir;
-                    eval {
-                        my $cert_errors;
-                        remove_tree($cert_dir, { error => \$cert_errors });
-                        if ($cert_errors && @$cert_errors) {
-                            push @cleanup_errors, "Unable to completely remove SSL certificate directory $cert_dir";
-                        }
-                    };
-                    push @cleanup_errors, "Unable to remove SSL certificate directory $cert_dir: $@" if $@;
+                    if (-d $cert_dir) {
+                        eval {
+                            my $errors;
+                            remove_tree($cert_dir, { error => \$errors });
+                            push @cleanup_errors, "Unable to remove SSL certificate directory $cert_dir" if $errors && @$errors;
+                        };
+                        push @cleanup_errors, "Unable to remove SSL certificate directory $cert_dir: $@" if $@;
+                    }
                 }
-
                 if (@cleanup_errors) {
                     $message = "Domain $domain was removed from OpenLiteSpeed, but cleanup was incomplete.";
                     $error = join("\n", @cleanup_errors);
                 } else {
-                    $message = "Domain $domain was removed successfully. Its OpenLiteSpeed configuration, listener mappings, domain directory and SSL certificate files were deleted.";
+                    $message = "Domain $domain was removed successfully. Its OpenLiteSpeed configuration, domain directory and SSL certificate directories were deleted.";
                 }
             } else { $error = $out; }
         } else { $error = 'Unable to locate the virtual host configuration block.'; }
@@ -281,8 +289,7 @@ my @domains = vhost_names($content);
 
 print <<'HTML';
 <style>
-.ols-domains{max-width:1050px;margin:0 auto}.ols-card{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:12px;margin-bottom:16px;overflow:hidden}.ols-card h2{font-size:16px;margin:0;padding:16px 20px;border-bottom:1px solid var(--border-color,rgba(128,128,128,.16))}.ols-body{padding:18px 20px}.ols-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.ols-field label{display:block;font-size:11px;font-weight:700;margin-bottom:6px;opacity:.7}.ols-field input{width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid var(--border-color,rgba(128,128,128,.28));border-radius:4px;background:transparent;color:inherit}.ols-note{font-size:12px;opacity:.62}.ols-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px}.ols-btn{display:inline-block;padding:8px 13px;border:1px solid var(--border-color,rgba(128,128,128,.25));border-radius:6px;text-decoration:none;font-size:12px;font-weight:600;color:inherit;background:transparent;cursor:pointer}.ols-list{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:8px;overflow:hidden}.ols-row{display:grid;grid-template-columns:minmax(220px,1fr) minmax(250px,1fr) 100px;gap:12px;align-items:center;padding:11px 13px;border-bottom:1px solid var(--border-color,rgba(128,128,128,.16))}.ols-row:last-child{border-bottom:0}.ols-head{font-size:10px;text-transform:uppercase;letter-spacing:.05em;font-weight:700;opacity:.58}.ols-domain{font-weight:700}.ols-danger{color:#d9534f}.ols-add-highlight{border-color:rgba(53,132,228,.38);background:linear-gradient(180deg,rgba(53,132,228,.08),rgba(53,132,228,.025));box-shadow:0 2px 10px rgba(53,132,228,.06)}.ols-add-highlight h2{background:rgba(53,132,228,.07);border-bottom-color:rgba(53,132,228,.18)}.ols-add-intro{display:flex;align-items:flex-start;gap:12px;margin-bottom:18px}.ols-add-icon{width:34px;height:34px;flex:0 0 34px;border-radius:9px;display:flex;align-items:center;justify-content:center;background:rgba(53,132,228,.13);color:#3584e4;font-size:20px;font-weight:400;line-height:1}.ols-add-copy strong{display:block;font-size:13px;margin-bottom:3px}.ols-add-copy span{display:block;font-size:12px;line-height:1.5;opacity:.68}.ols-field-help{display:block;margin-top:5px;font-size:11px;line-height:1.4;opacity:.56}.ols-alias-input{display:flex;align-items:center;border:1px solid var(--border-color,rgba(128,128,128,.28));border-radius:4px;background:transparent;overflow:hidden}.ols-alias-input input{border:0!important;border-radius:0!important;min-width:0}.ols-alias-suffix{padding:0 10px;font-size:12px;opacity:.62;white-space:nowrap}.ols-notification,.ols-error-notification{display:flex;align-items:flex-start;gap:10px;padding:12px 15px;margin:0 0 16px;border-radius:8px;font-size:13px;font-weight:600}.ols-notification{border:1px solid rgba(40,167,69,.28);background:rgba(40,167,69,.10)}.ols-notification:before{content:'✓';display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:rgba(40,167,69,.18);color:#35a854}.ols-error-notification{border:1px solid rgba(220,53,69,.28);background:rgba(220,53,69,.10)}.ols-error-notification:before{content:'!';display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:rgba(220,53,69,.18);color:#d9534f}.ols-error-notification{white-space:pre-line}
-@media(max-width:760px){.ols-grid,.ols-ssl-options{grid-template-columns:1fr}.ols-row{grid-template-columns:1fr;gap:5px}}
+.ols-domains{max-width:1050px;margin:0 auto}.ols-card{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:12px;margin-bottom:16px;overflow:hidden}.ols-card h2{font-size:16px;margin:0;padding:16px 20px;border-bottom:1px solid var(--border-color,rgba(128,128,128,.16))}.ols-body{padding:18px 20px}.ols-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.ols-field label{display:block;font-size:11px;font-weight:700;margin-bottom:6px;opacity:.7}.ols-field input{width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid var(--border-color,rgba(128,128,128,.28));border-radius:4px;background:transparent;color:inherit}.ols-note,.ols-field-help{font-size:11px;line-height:1.45;opacity:.58}.ols-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px}.ols-btn{display:inline-block;padding:8px 13px;border:1px solid var(--border-color,rgba(128,128,128,.25));border-radius:6px;text-decoration:none;font-size:12px;font-weight:600;color:inherit;background:transparent;cursor:pointer}.ols-list{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:8px;overflow:hidden}.ols-row{display:grid;grid-template-columns:minmax(220px,1fr) minmax(250px,1fr) 100px;gap:12px;align-items:center;padding:11px 13px;border-bottom:1px solid var(--border-color,rgba(128,128,128,.16))}.ols-row:last-child{border-bottom:0}.ols-head{font-size:10px;text-transform:uppercase;letter-spacing:.05em;font-weight:700;opacity:.58}.ols-domain{font-weight:700}.ols-danger{color:#d9534f}.ols-add-highlight{border-color:rgba(53,132,228,.38);background:linear-gradient(180deg,rgba(53,132,228,.08),rgba(53,132,228,.025));box-shadow:0 2px 10px rgba(53,132,228,.06)}.ols-add-highlight h2{background:rgba(53,132,228,.07);border-bottom-color:rgba(53,132,228,.18)}.ols-add-intro{display:flex;align-items:flex-start;gap:12px;margin-bottom:18px}.ols-add-icon{width:34px;height:34px;flex:0 0 34px;border-radius:9px;display:flex;align-items:center;justify-content:center;background:rgba(53,132,228,.13);color:#3584e4;font-size:20px}.ols-add-copy strong{display:block;font-size:13px;margin-bottom:3px}.ols-add-copy span{display:block;font-size:12px;line-height:1.5;opacity:.68}.ols-alias-input{display:flex;align-items:center;border:1px solid var(--border-color,rgba(128,128,128,.28));border-radius:4px;overflow:hidden}.ols-alias-input input{border:0!important;border-radius:0!important;min-width:0}.ols-alias-suffix{padding:0 10px;font-size:12px;opacity:.62;white-space:nowrap}.ols-notification,.ols-error-notification{display:flex;align-items:flex-start;gap:10px;padding:12px 15px;margin:0 0 16px;border-radius:8px;font-size:13px;font-weight:600}.ols-notification{border:1px solid rgba(40,167,69,.28);background:rgba(40,167,69,.10)}.ols-notification:before{content:'✓';display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:rgba(40,167,69,.18);color:#35a854}.ols-error-notification{border:1px solid rgba(220,53,69,.28);background:rgba(220,53,69,.10)}.ols-error-notification:before{content:'!';display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:rgba(220,53,69,.18);color:#d9534f}.ols-ssl-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.ols-ssl-option{border:1px solid var(--border-color,rgba(128,128,128,.25));border-radius:8px;padding:11px 12px}.ols-ssl-option label{display:block;font-size:12px;font-weight:700;cursor:pointer}.ols-ssl-option input{width:auto;margin-right:7px}.ols-ssl-option span{display:block;margin:5px 0 0 22px;font-size:11px;line-height:1.4;opacity:.6}.ols-ssl-email{margin-top:10px;display:none}.ols-ssl-email.visible{display:block}
 </style>
 HTML
 
@@ -290,9 +297,9 @@ print "<div class='ols-domains'>";
 print "<div class='ols-notification'>".&html_escape($message)."</div>" if $message;
 print "<div class='ols-error-notification'>".&html_escape($error)."</div>" if $error;
 print "<section class='ols-card ols-add-highlight'><h2>Add Domain</h2><div class='ols-body'><div class='ols-add-intro'><div class='ols-add-icon'>+</div><div class='ols-add-copy'><strong>Register a new website with OpenLiteSpeed</strong><span>Creates the virtual host, public_html, logs, CGI directory, cache directory and listener mappings automatically.</span></div></div><form method='post' action='domains.cgi'><input type='hidden' name='action' value='add'><div class='ols-grid'><div class='ols-field'><label for='ols-domain'>Domain</label><input id='ols-domain' name='domain' type='text' placeholder='example.com' required><span class='ols-field-help'>Enter the primary domain, without http:// or https://.</span></div><div class='ols-field'><label for='ols-alias-prefixes'>Aliases / Subdomains</label><div class='ols-alias-input'><input id='ols-alias-prefixes' name='alias_prefixes' type='text' placeholder='xyz,account,community' autocomplete='off'><span class='ols-alias-suffix' id='ols-alias-suffix'>.example.com</span></div><span class='ols-field-help'>Enter prefixes separated by commas. For example xyz,account,community becomes xyz.example.com, account.example.com and community.example.com. www is always added automatically.</span></div></div><div class='ols-actions'><button class='ols-btn' type='submit'>Add Domain</button><a class='ols-btn' href='index.cgi'>Back to Websites</a></div></form></div></section>";
-print "<section class='ols-card'><h2>Registered Domains</h2><div class='ols-body'><p class='ols-note'>Removing a domain unregisters its OpenLiteSpeed configuration and listener mappings, and permanently deletes its domain directory and any matching SSL certificate files managed under /etc/letsencrypt.</p><div class='ols-list'><div class='ols-row ols-head'><div>Domain</div><div>Virtual Host</div><div>Action</div></div>";
+print "<section class='ols-card'><h2>Registered Domains</h2><div class='ols-body'><p class='ols-note'>Removing a domain unregisters its OpenLiteSpeed configuration and listener mappings, and deletes its domain directory and SSL certificate directories.</p><div class='ols-list'><div class='ols-row ols-head'><div>Domain</div><div>Virtual Host</div><div>Action</div></div>";
 if (!@domains) { print "<div class='ols-body ols-note'>No domains registered.</div>"; }
-else { for my $d (@domains) { my $safe_d = &html_escape($d); print "<div class='ols-row'><div class='ols-domain'>$safe_d</div><div>".&html_escape("$domain_base/$d")."</div><div><form method='post' action='domains.cgi' onsubmit=\"return confirm('Remove $d from OpenLiteSpeed? The domain directory and any matching SSL certificate files will also be deleted.');\"><input type='hidden' name='action' value='remove'><input type='hidden' name='domain' value='".&quote_escape($d)."'><button class='ols-btn ols-danger' type='submit'>Remove</button></form></div></div>"; } }
+else { for my $d (@domains) { print "<div class='ols-row'><div class='ols-domain'>".&html_escape($d)."</div><div>".&html_escape("$domain_base/$d")."</div><div><form method='post' action='domains.cgi' onsubmit=\"return confirm('Remove $d from OpenLiteSpeed? The domain directory and SSL certificate directories will also be deleted.');\"><input type='hidden' name='action' value='remove'><input type='hidden' name='domain' value='".&quote_escape($d)."'><button class='ols-btn ols-danger' type='submit'>Remove</button></form></div></div>"; } }
 print "</div></div></section></div>";
 
 print <<'HTML';
