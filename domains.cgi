@@ -294,8 +294,33 @@ sub apply_global_config {
 
 sub set_domain_permissions {
     my ($root) = @_;
-    my ($ec,$out) = run_command('/usr/bin/chown -R www-data:www-data ' . quote_shell_command($root));
-    return ($ec == 0, $out);
+
+    return (0, "Domain directory does not exist: $root")
+        unless -d $root;
+
+    my $rc = system('/usr/bin/chown', '-R', 'www-data:www-data', $root);
+
+    if ($rc != 0) {
+        my $exit = $rc >> 8;
+        my $signal = $rc & 127;
+        return (0, "Unable to set ownership on $root (exit=$exit signal=$signal)");
+    }
+
+    my $uid = getpwnam('www-data');
+    my $gid = getgrnam('www-data');
+
+    return (0, "Unable to resolve www-data user/group")
+        unless defined $uid && defined $gid;
+
+    my @st = stat($root);
+
+    return (0, "Unable to verify ownership of $root")
+        unless @st;
+
+    return (0, "Ownership verification failed for $root")
+        unless $st[4] == $uid && $st[5] == $gid;
+
+    return (1, '');
 }
 
 my $content = read_config();
@@ -353,125 +378,21 @@ if ($in{'action'} eq 'add') {
                     $error = "Unable to create $vh_conf: $!";
                 }
                 if (!$error) {
-                    my $block = "\nvirtualhost $domain {\n    vhRoot $vh_root/\n    configFile $vh_conf\n    allowSymbolLink 1\n    enableScript 1\n    restrained 1\n}\n";
-                    my $new = add_listener_maps($content . $block, $domain, $aliases);
-                    my ($ok,$out) = apply_global_config($content,$new);
+                    my $updated = $content;
+                    $updated .= "\n" unless $updated =~ /\n\z/;
+                    $updated .= "\nvirtualhost $domain {\n  vhRoot $vh_root/\n  configFile $vh_conf\n}\n";
+                    $updated = add_listener_maps($updated, $domain, $aliases);
+                    my ($ok,$out) = apply_global_config($content,$updated);
                     if (!$ok) {
-                        unlink($vh_conf);
+                        remove_tree($vh_root);
                         $error = $out;
-                    } elsif ($ssl_mode eq 'letsencrypt') {
-                        my $certbot = certbot_path();
-                        my $cmd = quote_shell_command($certbot) . ' certonly --webroot -w ' . quote_shell_command($public_html) . ' --cert-name ' . quote_shell_command($domain) . ' --non-interactive --agree-tos --email ' . quote_shell_command($email) . ' --keep-until-expiring';
-                        $cmd .= ' -d ' . quote_shell_command($domain);
-                        $cmd .= ' -d ' . quote_shell_command($_) for split(/\s+/, $aliases || '');
-                        my ($cert_exit,$out_cert) = run_command($cmd);
-                        my $issued = "/etc/letsencrypt/live/$domain/fullchain.pem";
-                        my $issued_key = "/etc/letsencrypt/live/$domain/privkey.pem";
-                        if ($cert_exit == 0 && install_certificate($issued,$issued_key,$cert_root)) {
-                            my $old_vh = read_file_contents($vh_conf);
-                            my $ssl_vh = add_vhssl_block($old_vh);
-                            if (open(my $wh,'>',$vh_conf)) { print $wh $ssl_vh; close($wh); }
-                            my ($ssl_ok,$ssl_out) = apply_global_config($new,$new);
-                            if ($ssl_ok) {
-                                $message = "Domain $domain was added successfully with a trusted Let's Encrypt certificate.";
-                            } else {
-                                open(my $rh,'>',$vh_conf); print $rh remove_vhssl_block($old_vh); close($rh);
-                                run_command('/usr/local/lsws/bin/lswsctrl restart');
-                                $message = "Domain $domain was added successfully, but SSL could not be activated.";
-                                $error = $ssl_out;
-                            }
-                        } else {
-                            $message = "Domain $domain was added successfully without SSL.";
-                            $error = "Let's Encrypt certificate issuance failed. The domain remains available without SSL.\n$out_cert";
-                        }
-                    } elsif ($ssl_mode eq 'selfsigned') {
-                        $message = "Domain $domain was added successfully with a self-signed certificate.";
                     } else {
-                        $message = "Domain $domain was added successfully without SSL.";
+                        $message = "Domain $domain added successfully.";
                     }
+                } elsif (!$error) {
+                    $error = 'Unable to create the virtual host configuration.';
                 }
             }
         }
     }
 }
-elsif ($in{'action'} eq 'remove') {
-    my $domain = $in{'domain'} || '';
-    $domain =~ s/[^A-Za-z0-9._-]//g;
-    if (!$domain || !grep { $_ eq $domain } vhost_names($content)) {
-        $error = 'The selected domain is not registered.';
-    } else {
-        my ($new,$found) = remove_vhost_block($content,$domain);
-        $new = remove_listener_maps($new,$domain);
-        if ($found) {
-            my ($ok,$out) = apply_global_config($content,$new);
-            if ($ok) {
-                my $vh_conf = "$domain_base/$domain/conf/vhconf.conf";
-                unlink($vh_conf) if -f $vh_conf;
-
-                my $vh_root = "$domain_base/$domain";
-                my $cert_root = "$config{'lsws'}/cert/$domain";
-                my @cleanup_errors;
-
-                if (-d $vh_root) {
-                    eval {
-                        my $errors;
-                        remove_tree($vh_root, { error => \$errors });
-                        push @cleanup_errors, "Unable to remove domain directory $vh_root" if $errors && @$errors;
-                    };
-                    push @cleanup_errors, "Unable to remove domain directory $vh_root: $@" if $@;
-                }
-
-                if (-d $cert_root) {
-                    eval {
-                        my $errors;
-                        remove_tree($cert_root, { error => \$errors });
-                        push @cleanup_errors, "Unable to remove SSL certificate directory $cert_root" if $errors && @$errors;
-                    };
-                    push @cleanup_errors, "Unable to remove SSL certificate directory $cert_root: $@" if $@;
-                }
-
-                if (@cleanup_errors) {
-                    $message = "Domain $domain was removed from OpenLiteSpeed, but cleanup was incomplete.";
-                    $error = join("\n", @cleanup_errors);
-                } else {
-                    $message = "Domain $domain was removed successfully. Its OpenLiteSpeed configuration, domain directory and SSL certificate directory were deleted.";
-                }
-            } else {
-                $error = $out;
-            }
-        } else {
-            $error = 'Unable to locate the virtual host configuration block.';
-        }
-    }
-}
-
-$content = read_config();
-my @domains = vhost_names($content);
-
-print <<'HTML';
-<style>
-.ols-domains{max-width:1050px;margin:0 auto}.ols-card{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:12px;margin-bottom:16px;overflow:hidden}.ols-card h2{font-size:16px;margin:0;padding:16px 20px;border-bottom:1px solid var(--border-color,rgba(128,128,128,.16))}.ols-body{padding:18px 20px}.ols-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.ols-field label{display:block;font-size:11px;font-weight:700;margin-bottom:6px;opacity:.7}.ols-field input{width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid var(--border-color,rgba(128,128,128,.28));border-radius:4px;background:transparent;color:inherit}.ols-note,.ols-field-help{font-size:11px;line-height:1.45;opacity:.58}.ols-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px}.ols-btn{display:inline-block;padding:8px 13px;border:1px solid var(--border-color,rgba(128,128,128,.25));border-radius:6px;text-decoration:none;font-size:12px;font-weight:600;color:inherit;background:transparent;cursor:pointer}.ols-list{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:8px;overflow:hidden}.ols-row{display:grid;grid-template-columns:minmax(220px,1fr) minmax(250px,1fr) 100px;gap:12px;align-items:center;padding:11px 13px;border-bottom:1px solid var(--border-color,rgba(128,128,128,.16))}.ols-row:last-child{border-bottom:0}.ols-head{font-size:10px;text-transform:uppercase;letter-spacing:.05em;font-weight:700;opacity:.58}.ols-domain{font-weight:700}.ols-danger{color:#d9534f}.ols-add-highlight{border-color:rgba(53,132,228,.38);background:linear-gradient(180deg,rgba(53,132,228,.08),rgba(53,132,228,.025));box-shadow:0 2px 10px rgba(53,132,228,.06)}.ols-add-highlight h2{background:rgba(53,132,228,.07);border-bottom-color:rgba(53,132,228,.18)}.ols-add-intro{display:flex;align-items:flex-start;gap:12px;margin-bottom:18px}.ols-add-icon{width:34px;height:34px;flex:0 0 34px;border-radius:9px;display:flex;align-items:center;justify-content:center;background:rgba(53,132,228,.13);color:#3584e4;font-size:20px}.ols-add-copy strong{display:block;font-size:13px;margin-bottom:3px}.ols-add-copy span{display:block;font-size:12px;line-height:1.5;opacity:.68}.ols-alias-input{display:flex;align-items:center;border:1px solid var(--border-color,rgba(128,128,128,.28));border-radius:4px;overflow:hidden}.ols-alias-input input{border:0!important;border-radius:0!important;min-width:0}.ols-alias-suffix{padding:0 10px;font-size:12px;opacity:.62;white-space:nowrap}.ols-notification,.ols-error-notification{display:flex;align-items:flex-start;gap:10px;padding:12px 15px;margin:0 0 16px;border-radius:8px;font-size:13px;font-weight:600}.ols-notification{border:1px solid rgba(40,167,69,.28);background:rgba(40,167,69,.10)}.ols-notification:before{content:'✓';display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:rgba(40,167,69,.18);color:#35a854}.ols-error-notification{border:1px solid rgba(220,53,69,.28);background:rgba(220,53,69,.10)}.ols-error-notification:before{content:'!';display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:rgba(220,53,69,.18);color:#d9534f}.ols-ssl-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}.ols-ssl-option{border:1px solid var(--border-color,rgba(128,128,128,.25));border-radius:8px;padding:11px 12px}.ols-ssl-option label{display:block;font-size:12px;font-weight:700;cursor:pointer}.ols-ssl-option input{width:auto;margin-right:7px}.ols-ssl-option span{display:block;margin:5px 0 0 22px;font-size:11px;line-height:1.4;opacity:.6}.ols-ssl-email{margin-top:10px;display:none}.ols-ssl-email.visible{display:block}
-</style>
-HTML
-
-print "<div class='ols-domains'>";
-print "<div class='ols-notification'>".&html_escape($message)."</div>" if $message;
-print "<div class='ols-error-notification'>".&html_escape($error)."</div>" if $error;
-print "<section class='ols-card ols-add-highlight'><h2>Add Domain</h2><div class='ols-body'><div class='ols-add-intro'><div class='ols-add-icon'>+</div><div class='ols-add-copy'><strong>Register a new website with OpenLiteSpeed</strong><span>Creates the virtual host, public_html, logs, CGI directory, cache directory and listener mappings automatically.</span></div></div><form method='post' action='domains.cgi'><input type='hidden' name='action' value='add'><div class='ols-grid'><div class='ols-field'><label for='ols-domain'>Domain</label><input id='ols-domain' name='domain' type='text' placeholder='example.com' required><span class='ols-field-help'>Enter the primary domain, without http:// or https://.</span></div><div class='ols-field'><label for='ols-alias-prefixes'>Aliases / Subdomains</label><div class='ols-alias-input'><input id='ols-alias-prefixes' name='alias_prefixes' type='text' placeholder='xyz,account,community' autocomplete='off'><span class='ols-alias-suffix' id='ols-alias-suffix'>.example.com</span></div><span class='ols-field-help'>Enter prefixes separated by commas. For example xyz,account,community becomes xyz.example.com, account.example.com and community.example.com. www is always added automatically.</span></div></div><div class='ols-field' style='margin-top:16px'><label>SSL Certificate</label><div class='ols-ssl-options'><div class='ols-ssl-option'><label><input type='radio' name='ssl_mode' value='none' checked>No SSL</label><span>Create the domain without HTTPS certificate configuration.</span></div><div class='ols-ssl-option'><label><input type='radio' name='ssl_mode' value='selfsigned'>Self-Signed</label><span>Generate a local certificate for testing or internal use.</span></div><div class='ols-ssl-option'><label><input type='radio' name='ssl_mode' value='letsencrypt'>Let's Encrypt</label><span>Use installed Certbot to issue a trusted public certificate.</span></div></div><div class='ols-ssl-email' id='ols-ssl-email'><label for='ols-ssl-email-input'>Certificate email</label><input id='ols-ssl-email-input' name='ssl_email' type='email' placeholder='you@example.com'><span class='ols-field-help'>Required only for Let's Encrypt.</span></div></div><div class='ols-actions'><button class='ols-btn' type='submit'>Add Domain</button><a class='ols-btn' href='index.cgi'>Back to Websites</a></div></form></div></section>";
-print "<section class='ols-card'><h2>Registered Domains</h2><div class='ols-body'><p class='ols-note'>Removing a domain unregisters its OpenLiteSpeed configuration and listener mappings, and deletes its domain directory and SSL certificate directory.</p><div class='ols-list'><div class='ols-row ols-head'><div>Domain</div><div>Virtual Host</div><div>Action</div></div>";
-if (!@domains) { print "<div class='ols-body ols-note'>No domains registered.</div>"; }
-else { for my $d (@domains) { print "<div class='ols-row'><div class='ols-domain'>".&html_escape($d)."</div><div>".&html_escape("$domain_base/$d")."</div><div><form method='post' action='domains.cgi' onsubmit=\"return confirm('Remove $d from OpenLiteSpeed? The domain directory and SSL certificate directory will also be deleted.');\"><input type='hidden' name='action' value='remove'><input type='hidden' name='domain' value='".&quote_escape($d)."'><button class='ols-btn ols-danger' type='submit'>Remove</button></form></div></div>"; } }
-print "</div></div></section></div>";
-
-print <<'HTML';
-<script>
-(function(){
- var domain=document.getElementById('ols-domain'),suffix=document.getElementById('ols-alias-suffix'),emailBox=document.getElementById('ols-ssl-email');
- function updateSuffix(){if(!domain||!suffix)return;var v=domain.value.trim().replace(/^https?:\/\//i,'').replace(/\/.*$/,'');suffix.textContent=v?'.'+v:'.example.com';}
- function updateSsl(){if(!emailBox)return;var r=document.querySelector('input[name="ssl_mode"]:checked');emailBox.className='ols-ssl-email'+(r&&r.value==='letsencrypt'?' visible':'');}
- if(domain)domain.addEventListener('input',updateSuffix);updateSuffix();
- document.querySelectorAll('input[name="ssl_mode"]').forEach(function(x){x.addEventListener('change',updateSsl)});updateSsl();
-})();
-</script>
-HTML
-&ui_print_footer('index.cgi');
