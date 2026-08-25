@@ -185,7 +185,15 @@ if ($in{'action'} eq 'acme_issue' || $in{'action'} eq 'renew') {
 my %info=cert_info($fullchain);
 my $exists=(-f $fullchain && -f $privkey);
 my $type='Not installed';
-if ($exists) { $type = (($info{'issuer'}||'') =~ /Let's Encrypt|ISRG/i) ? "Let's Encrypt" : (($info{'issuer'}||'') =~ /ZeroSSL|GoGetSSL/i ? 'ZeroSSL' : 'Certificate')); }
+if ($exists) {
+    if (($info{'issuer'} || '') =~ /Let's Encrypt|ISRG/i) {
+        $type="Let's Encrypt";
+    } elsif (($info{'issuer'} || '') =~ /ZeroSSL|GoGetSSL/i) {
+        $type='ZeroSSL';
+    } else {
+        $type='Certificate';
+    }
+}
 my @domains=domains_for_vh();
 my $domain_text=join(', ',@domains);
 
