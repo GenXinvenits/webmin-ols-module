@@ -132,32 +132,113 @@ sub validate_and_restart {
     return (1, '');
 }
 
+sub selfsigned_version {
+    my ($archive) = @_;
+    my $version = 1;
+    if (-d $archive) {
+        opendir(my $dh, $archive);
+        my $max = 0;
+        while (my $f = readdir($dh)) {
+            if ($f =~ /^cert(\d+)\.pem$/) {
+                $max = $1 if $1 > $max;
+            }
+        }
+        closedir($dh);
+        $version = $max + 1 if $max;
+    }
+    return $version;
+}
+
+sub write_certbot_readme {
+    my ($live_dir) = @_;
+    my $readme = "$live_dir/README";
+    if (open(my $fh, '>', $readme)) {
+        print $fh <<'EOF';
+This directory contains your keys and certificates.
+
+`privkey.pem`  : the private key for your certificate.
+`fullchain.pem`: the certificate file used in most server software.
+`chain.pem`    : the certificate chain file.
+`cert.pem`     : the certificate file.
+
+WARNING: DO NOT MOVE OR RENAME THESE FILES!
+         The certificate manager expects these files to remain in this location.
+EOF
+        close($fh);
+        chmod(0644, $readme);
+    }
+}
+
 if ($in{'action'} eq 'selfsigned') {
     my $days = 3650;
     my $key_size = 2048;
     my @domains = domains_for_vh();
-    mkdir($cert_root) if !-d $cert_root;
-    backup_certificates();
+    my $base_dir = '/etc/letsencrypt';
+    my $archive_dir = "$base_dir/archive/$vh";
+    my $live_dir = "$base_dir/live/$vh";
+    mkdir($base_dir) if !-d $base_dir;
+    mkdir("$base_dir/archive") if !-d "$base_dir/archive";
+    mkdir("$base_dir/live") if !-d "$base_dir/live";
+    mkdir($archive_dir) if !-d $archive_dir;
+    mkdir($live_dir) if !-d $live_dir;
+
+    my $version = selfsigned_version($archive_dir);
     my $tmp = "/tmp/webmin-ols-ssl-$$";
     mkdir($tmp);
     my $key = "$tmp/privkey.pem";
     my $crt = "$tmp/cert.pem";
+    my $cnf = "$tmp/openssl.cnf";
     my $san = join(',', map { 'DNS:'.$_ } @domains);
     my $cn = $domains[0] || $vh;
-    my $cnf = "$tmp/openssl.cnf";
+
     if (open(my $fh,'>',$cnf)) {
-        print $fh "[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=v3\n[dn]\nCN=$cn\n[v3]\nsubjectAltName=$san\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n";
+        print $fh "[ req ]\ndefault_bits = $key_size\nprompt = no\ndefault_md = sha256\ndistinguished_name = dn\nx509_extensions = req_ext\n\n[ dn ]\nCN = $cn\n\n[ req_ext ]\nsubjectAltName = $san\nkeyUsage = digitalSignature,keyEncipherment\nextendedKeyUsage = serverAuth\n";
         close($fh);
+
         my ($e1,$o1)=run_cmd('openssl genrsa -out '.shell_quote($key).' '.$key_size);
         my ($e2,$o2)=run_cmd('openssl req -new -x509 -sha256 -key '.shell_quote($key).' -out '.shell_quote($crt).' -days '.$days.' -config '.shell_quote($cnf));
+
         if ($e1==0 && $e2==0) {
-            if (deploy_certificate($crt,$key)) {
-                my ($ok,$out)=validate_and_restart();
-                if ($ok) { $message='Self-signed certificate generated, installed and OpenLiteSpeed restarted successfully.'; }
-                else { $error=$out; }
-            } else { $error='Unable to install the generated certificate files.'; }
-        } else { $error="OpenSSL certificate generation failed.\n".($o1||$o2); }
-    } else { $error='Unable to create temporary OpenSSL configuration.'; }
+            my $archive_key = "$archive_dir/privkey${version}.pem";
+            my $archive_cert = "$archive_dir/cert${version}.pem";
+            my $archive_chain = "$archive_dir/chain${version}.pem";
+            my $archive_fullchain = "$archive_dir/fullchain${version}.pem";
+
+            if (system('/bin/cp','-f',$key,$archive_key)==0 &&
+                system('/bin/cp','-f',$crt,$archive_cert)==0 &&
+                system('/bin/cp','-f',$crt,$archive_chain)==0 &&
+                system('/bin/cp','-f',$crt,$archive_fullchain)==0) {
+
+                chmod(0600,$archive_key);
+                chmod(0644,$archive_cert,$archive_chain,$archive_fullchain);
+
+                unlink("$live_dir/privkey.pem","$live_dir/cert.pem","$live_dir/chain.pem","$live_dir/fullchain.pem");
+                symlink("../../archive/$vh/privkey${version}.pem", "$live_dir/privkey.pem");
+                symlink("../../archive/$vh/cert${version}.pem", "$live_dir/cert.pem");
+                symlink("../../archive/$vh/chain${version}.pem", "$live_dir/chain.pem");
+                symlink("../../archive/$vh/fullchain${version}.pem", "$live_dir/fullchain.pem");
+                write_certbot_readme($live_dir);
+
+                if (deploy_certificate($live_dir.'/fullchain.pem',$live_dir.'/privkey.pem')) {
+                    my ($ok,$out)=validate_and_restart();
+                    if ($ok) {
+                        $message="Self-signed certificate generated as version $version, Certbot-style lineage updated, deployed and OpenLiteSpeed restarted successfully.";
+                    } else {
+                        $error=$out;
+                    }
+                } else {
+                    $error='Certificate lineage was created, but the certificate could not be deployed to OpenLiteSpeed.';
+                }
+            } else {
+                $error='Unable to store the generated certificate lineage in /etc/letsencrypt/archive/'.$vh.'.';
+            }
+        } else {
+            $error="OpenSSL certificate generation failed.\n".($o1||$o2);
+        }
+    } else {
+        $error='Unable to create temporary OpenSSL configuration.';
+    }
+
     unlink($key,$crt,$cnf);
     rmdir($tmp);
 }
@@ -215,7 +296,7 @@ my $default_type = ($type eq "Let's Encrypt") ? 'letsencrypt' : 'selfsigned';
 
 print <<'HTML';
 <style>
-.ols-ssl{max-width:1050px;margin:0 auto}.ols-ssl-hero{padding:28px 30px;border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:14px;margin-bottom:18px}.ols-kicker{font-size:11px;text-transform:uppercase;letter-spacing:.08em;opacity:.55;font-weight:700}.ols-ssl h1{margin:6px 0;font-size:29px}.ols-muted{opacity:.62;font-size:13px}.ols-card{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:12px;margin-bottom:16px;overflow:hidden}.ols-card h2{font-size:16px;margin:0;padding:16px 20px;border-bottom:1px solid var(--border-color,rgba(128,128,128,.16))}.ols-body{padding:18px 20px}.ols-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--border-color,rgba(128,128,128,.18));border:1px solid var(--border-color,rgba(128,128,128,.18));border-radius:9px;overflow:hidden}.ols-grid>div{padding:13px 15px;background:var(--body-bg,transparent);min-width:0}.ols-label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.06em;opacity:.52;margin-bottom:5px}.ols-value{font-size:13px;font-weight:600;word-break:break-word}.ols-badge{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(40,167,69,.13);color:#39a866;font-size:11px;font-weight:700}.ols-badge.off{background:rgba(128,128,128,.12);color:#888}.ols-actions{display:flex;gap:10px;flex-wrap:wrap}.ols-btn{display:inline-block;padding:10px 15px;border-radius:8px;text-decoration:none;border:1px solid var(--border-color,rgba(128,128,128,.25));font-weight:700;font-size:12px;color:inherit;background:transparent;cursor:pointer}.ols-btn:hover{background:rgba(128,128,128,.09)}.ols-btn.primary{background:#3584e4;color:#fff;border-color:#3584e4}.ols-btn.primary:hover{background:#2f75c7;border-color:#2f75c7}.ols-btn:disabled{opacity:.5;cursor:not-allowed}.ols-type-box{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:10px;padding:14px}.ols-radio-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.ols-radio-option{display:block;border:1px solid var(--border-color,rgba(128,128,128,.25));border-radius:9px;padding:12px;cursor:pointer}.ols-radio-option:hover{background:rgba(128,128,128,.06)}.ols-radio-option input[type="radio"]{appearance:none !important;-webkit-appearance:none !important;width:18px !important;height:18px !important;margin:0 !important;padding:0 !important;border:2px solid currentColor !important;border-radius:50% !important;background:transparent !important;opacity:1 !important;position:static !important;pointer-events:auto !important;vertical-align:middle !important;display:inline-block !important;box-sizing:border-box !important}.ols-radio-option input[type="radio"]:checked{border-color:#3584e4 !important;background:radial-gradient(circle,#3584e4 0 4px,transparent 5px) !important}.ols-radio-option input[type="radio"]:disabled{opacity:.4 !important}.lawobject{display:none !important}.ols-radio-option .awradio{display:inline-flex !important;align-items:center !important;margin:0 8px 0 0 !important;vertical-align:middle !important}.ols-radio-option input[type="radio"]{display:inline-block !important;margin:0 !important;vertical-align:middle !important}.ols-radio-option strong{display:inline-block;font-size:13px;vertical-align:middle;margin:0}.ols-radio-option span{display:block;margin:6px 0 0 0;font-size:11px;line-height:1.4;opacity:.62}.ols-cert-panel{margin-top:14px}.ols-form{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:end}.ols-field label{display:block;font-size:11px;font-weight:700;margin-bottom:6px;opacity:.7}.ols-field input{width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border-color,rgba(128,128,128,.28));border-radius:8px;background:transparent;color:inherit}.ols-note{font-size:12px;opacity:.62}.ols-message{padding:13px 15px;border-radius:9px;margin-bottom:16px;white-space:pre-wrap}.ols-success{background:rgba(40,167,69,.1);border:1px solid rgba(40,167,69,.25)}.ols-error{background:rgba(220,53,69,.1);border:1px solid rgba(220,53,69,.25)}@media(max-width:700px){.ols-grid,.ols-radio-grid,.ols-form{grid-template-columns:1fr}}
+.ols-ssl{max-width:1050px;margin:0 auto}.ols-ssl-hero{padding:28px 30px;border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:14px;margin-bottom:18px}.ols-kicker{font-size:11px;text-transform:uppercase;letter-spacing:.08em;opacity:.55;font-weight:700}.ols-ssl h1{margin:6px 0;font-size:29px}.ols-muted{opacity:.62;font-size:13px}.ols-card{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:12px;margin-bottom:16px;overflow:hidden}.ols-card h2{font-size:16px;margin:0;padding:16px 20px;border-bottom:1px solid var(--border-color,rgba(128,128,128,.16))}.ols-body{padding:18px 20px}.ols-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--border-color,rgba(128,128,128,.18));border:1px solid var(--border-color,rgba(128,128,128,.18));border-radius:9px;overflow:hidden}.ols-grid>div{padding:13px 15px;background:var(--body-bg,transparent);min-width:0}.ols-label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.06em;opacity:.52;margin-bottom:5px}.ols-value{font-size:13px;font-weight:600;word-break:break-word}.ols-badge{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(40,167,69,.13);color:#39a866;font-size:11px;font-weight:700}.ols-badge.off{background:rgba(128,128,128,.12);color:#888}.ols-actions{display:flex;gap:10px;flex-wrap:wrap}.ols-btn{display:inline-block;padding:10px 15px;border-radius:8px;text-decoration:none;border:1px solid var(--border-color,rgba(128,128,128,.25));font-weight:700;font-size:12px;color:inherit;background:transparent;cursor:pointer}.ols-btn:hover{background:rgba(128,128,128,.09)}.ols-btn.primary{background:#3584e4;color:#fff;border-color:#3584e4}.ols-btn.primary:hover{background:#2f75c7;border-color:#2f75c7}.ols-btn:disabled{opacity:.5;cursor:not-allowed}.ols-type-box{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:10px;padding:14px}.ols-radio-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.ols-radio-option{display:block;border:1px solid var(--border-color,rgba(128,128,128,.25));border-radius:9px;padding:12px;cursor:pointer}.ols-radio-option:hover{background:rgba(128,128,128,.06)}.ols-radio-option input[type="radio"]{appearance:none !important;-webkit-appearance:none !important;width:18px !important;height:18px !important;margin:0 10px 0 0 !important;padding:0 !important;border:2px solid currentColor !important;border-radius:50% !important;background:transparent !important;opacity:1 !important;position:static !important;pointer-events:auto !important;vertical-align:middle !important;display:inline-block !important;box-sizing:border-box !important}.ols-radio-option input[type="radio"]:checked{border-color:#3584e4 !important;background:radial-gradient(circle,#3584e4 0 4px,transparent 5px) !important}.ols-radio-option input[type="radio"]:disabled{opacity:.4 !important}.lawobject{display:none !important}.ols-radio-option .awradio{display:inline-flex !important;align-items:center !important;margin:0 8px 0 0 !important;vertical-align:middle !important}.ols-radio-option strong{display:inline-block;font-size:13px;vertical-align:middle;margin:0}.ols-radio-option span{display:block;margin:6px 0 0 0;font-size:11px;line-height:1.4;opacity:.62}.ols-cert-panel{margin-top:14px}.ols-form{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:end}.ols-field label{display:block;font-size:11px;font-weight:700;margin-bottom:6px;opacity:.7}.ols-field input{width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border-color,rgba(128,128,128,.28));border-radius:8px;background:transparent;color:inherit}.ols-note{font-size:12px;opacity:.62}.ols-message{padding:13px 15px;border-radius:9px;margin-bottom:16px;white-space:pre-wrap}.ols-success{background:rgba(40,167,69,.1);border:1px solid rgba(40,167,69,.25)}.ols-error{background:rgba(220,53,69,.1);border:1px solid rgba(220,53,69,.25)}@media(max-width:700px){.ols-grid,.ols-radio-grid,.ols-form{grid-template-columns:1fr}}
 </style>
 HTML
 
@@ -237,7 +318,7 @@ print "</div></div></section>";
 print "<section class='ols-card'><h2>Certificate Type</h2><div class='ols-body'><form method='post' action='ssl.cgi' id='ssl-cert-form'><input type='hidden' name='vh' value='".&quote_escape($vh)."'><input type='hidden' name='action' id='ssl-action' value='".($default_type eq 'letsencrypt' ? 'letsencrypt_issue' : 'selfsigned')."'><div class='ols-type-box'><div class='ols-radio-grid'>";
 print "<label class='ols-radio-option'><input type='radio' name='cert_type' value='selfsigned'".($default_type eq 'selfsigned'?' checked':'')."><strong>Self-Signed</strong><span>Generate a 2048-bit RSA certificate valid for 10 years using the virtual host domains as SANs.</span></label>";
 print "<label class='ols-radio-option'><input type='radio' name='cert_type' value='letsencrypt'".($default_type eq 'letsencrypt'?' checked':'')."><strong>Let's Encrypt</strong><span>Use Certbot to obtain a trusted certificate from Let's Encrypt for all configured domains.</span></label>";
-print "</div><div id='selfsigned-panel' class='ols-cert-panel'><p class='ols-note'>The self-signed certificate is useful for internal sites, testing and environments where a public CA certificate is not required.</p></div>";
+print "</div><div id='selfsigned-panel' class='ols-cert-panel'><p class='ols-note'>The self-signed certificate is useful for internal sites, testing and environments where a public CA certificate is not required. Certificates are stored using the same archive/live lineage layout used by Certbot.</p></div>";
 print "<div id='letsencrypt-panel' class='ols-cert-panel' style='display:none'>";
 if (!$certbot_installed) {
     print "<p class='ols-note'>Certbot is not installed. Install it from the SSL Dependencies page before requesting a Let's Encrypt certificate.</p><div class='ols-actions'><a class='ols-btn' href='ssl-dependencies.cgi?vh=".&urlize($vh)."'>Open SSL Dependencies</a></div>";
