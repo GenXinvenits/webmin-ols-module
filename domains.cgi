@@ -109,9 +109,38 @@ sub add_listener_maps {
         push @maps, "    map $vh $alias\n";
     }
     return $text unless @maps;
-    my $maps = join('', @maps);
-    $text =~ s{(^\s*listener\s+\S+\s*\{.*?)(^\})}{"$1$maps$2"}gems;
-    return $text;
+
+    my @lines = split(/(?<=\n)/, $text, -1);
+    my @out;
+    my $in_listener = 0;
+    my $depth = 0;
+    my $inserted = 0;
+
+    for my $line (@lines) {
+        if (!$in_listener && $line =~ /^\s*listener\s+\S+\s*\{/i) {
+            $in_listener = 1;
+            $depth = 0;
+        }
+
+        if ($in_listener) {
+            my $opens = () = $line =~ /\{/g;
+            my $closes = () = $line =~ /\}/g;
+            $depth += $opens - $closes;
+
+            if ($depth <= 0 && $line =~ /^\s*\}/) {
+                push @out, @maps unless $inserted;
+                $inserted = 1;
+                $in_listener = 0;
+                $depth = 0;
+            }
+        }
+
+        push @out, $line;
+    }
+
+    # If the configuration had no listener block, leave it unchanged rather
+    # than creating an invalid global configuration section.
+    return join('', @out);
 }
 
 sub remove_listener_maps {
@@ -223,21 +252,17 @@ if ($in{'action'} eq 'add') {
         my $paths_ok = eval {
             make_path("$vh_root/conf", $public_html, "$vh_root/logs", "$vh_root/cgi-bin", "$public_html/.well-known/acme-challenge", "$vh_root/cachedata");
 
-            # Domain root itself is not writable by the web server.
             system('/bin/chown', 'root:nogroup', $vh_root) == 0 or die "Unable to set domain root ownership: $!";
             system('/bin/chmod', '755', $vh_root) == 0 or die "Unable to set domain root permissions: $!";
 
-            # Web content and CGI are served/managed by www-data.
             for my $path ($public_html, "$vh_root/cgi-bin", "$vh_root/cachedata") {
                 system('/bin/chown', '-R', 'www-data:www-data', $path) == 0 or die "Unable to set ownership for $path: $!";
                 system('/bin/chmod', '-R', '755', $path) == 0 or die "Unable to set permissions for $path: $!";
             }
 
-            # Vhost configuration is controlled by LiteSpeed's admin account.
             system('/bin/chown', '-R', 'lsadm:nogroup', "$vh_root/conf") == 0 or die "Unable to set configuration ownership: $!";
             system('/bin/chmod', '-R', '755', "$vh_root/conf") == 0 or die "Unable to set configuration permissions: $!";
 
-            # Logs are root-owned and not writable by ordinary users.
             system('/bin/chown', '-R', 'root:nogroup', "$vh_root/logs") == 0 or die "Unable to set log ownership: $!";
             system('/bin/chmod', '-R', '750', "$vh_root/logs") == 0 or die "Unable to set log permissions: $!";
 
