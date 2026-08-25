@@ -133,7 +133,13 @@ extprocessor www-data {
 }
 }; }
     my $alias_line="vhAliases                        ".build_template_aliases($domain,$alias_prefixes)."\n";
-    $template =~ s/__DOMAIN__/$domain/g; $template =~ s/__VH_ALIASES_LINE__/$alias_line/; $template =~ s/__PHP_CONFIG__/$php/; return $template;
+    my $admin_domain=$domain;
+    my @domain_parts=split(/\./, $domain);
+    $admin_domain=join('.', @domain_parts[-2,-1]) if @domain_parts > 2;
+    $template =~ s/__DOMAIN__/$admin_domain/g;
+    $template =~ s/__VH_ALIASES_LINE__/$alias_line/;
+    $template =~ s/__PHP_CONFIG__/$php/;
+    return $template;
 }
 
 my $content=read_config();
