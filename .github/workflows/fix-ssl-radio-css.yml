@@ -1,0 +1,32 @@
+name: Apply SSL provider radio CSS
+
+on:
+  push:
+    branches: [alpha]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.head_commit.message != 'Apply SSL provider radio CSS [final]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply production radio CSS only
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('ssl.cgi')
+          s = p.read_text()
+          old = '''.ols-radio-option input{margin-right:8px}.ols-radio-option strong{font-size:13px}'''
+          new = '''.ols-radio-option input[type="radio"]{appearance:none !important;-webkit-appearance:none !important;width:18px !important;height:18px !important;margin:0 10px 0 0 !important;padding:0 !important;border:2px solid currentColor !important;border-radius:50% !important;background:transparent !important;opacity:1 !important;position:static !important;pointer-events:auto !important;vertical-align:middle !important;display:inline-block !important;box-sizing:border-box !important}.ols-radio-option input[type="radio"]:checked{border-color:#3584e4 !important;background:radial-gradient(circle,#3584e4 0 4px,transparent 5px) !important}.ols-radio-option input[type="radio"]:disabled{opacity:.4 !important}.ols-radio-option strong{font-size:13px;vertical-align:middle}'''
+          if old not in s:
+              raise SystemExit('radio CSS target not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Commit change
+        uses: EndBug/add-and-commit@v9
+        with:
+          message: Apply SSL provider radio CSS [final]
+          add: ssl.cgi
