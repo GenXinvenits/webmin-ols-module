@@ -200,7 +200,6 @@ sub install_lineage {
             my ($match_e,$match_o)=run_cmd('openssl x509 -in '.shell_quote($tmp_cert).' -pubkey -noout | openssl pkey -pubin -outform DER 2>/dev/null | sha256sum');
             my ($key_e,$key_o)=run_cmd('openssl pkey -in '.shell_quote($tmp_key).' -pubout -outform DER 2>/dev/null | sha256sum');
             if ($match_e != 0 || $key_e != 0 || $match_o !~ /^([0-9a-f]+)/ || $key_o !~ /^([0-9a-f]+)/ || $1 ne $key_o =~ /^([0-9a-f]+)/ ? $1 : '') {
-                # Use a direct modulus/public-key comparison below for reliable compatibility.
                 my ($a_e,$a_o)=run_cmd('openssl x509 -in '.shell_quote($tmp_cert).' -pubkey -noout | openssl pkey -pubin -outform DER 2>/dev/null | sha256sum');
                 my ($b_e,$b_o)=run_cmd('openssl pkey -in '.shell_quote($tmp_key).' -pubout -outform DER 2>/dev/null | sha256sum');
                 my ($a)=($a_o =~ /^([0-9a-f]+)/); my ($b)=($b_o =~ /^([0-9a-f]+)/);
@@ -239,6 +238,46 @@ sub install_lineage {
     return $ok;
 }
 
+sub remove_lineage {
+    my $base_dir = '/etc/letsencrypt';
+    my $archive_dir = "$base_dir/archive/$vh";
+    my $live_dir = "$base_dir/live/$vh";
+    return (1,'') unless -d $archive_dir || -d $live_dir;
+
+    my $stamp = time();
+    my $backup_root = "/tmp/webmin-ols-remove-$vh-$stamp-$$";
+    mkdir($backup_root) or return (0,"Unable to create temporary SSL removal backup: $!");
+
+    my $archive_backup = "$backup_root/archive";
+    my $live_backup = "$backup_root/live";
+    my $moved_archive = 0;
+    my $moved_live = 0;
+
+    if (-d $archive_dir) {
+        if (rename($archive_dir,$archive_backup)) { $moved_archive=1; }
+        else { rmdir($backup_root); return (0,"Unable to move the certificate archive out of the way: $!"); }
+    }
+    if (-d $live_dir) {
+        if (rename($live_dir,$live_backup)) { $moved_live=1; }
+        else {
+            rename($archive_backup,$archive_dir) if $moved_archive;
+            rmdir($backup_root);
+            return (0,"Unable to move the live certificate directory out of the way: $!");
+        }
+    }
+
+    my ($valid,$out)=validate_and_restart();
+    if (!$valid) {
+        rename($live_backup,$live_dir) if $moved_live;
+        rename($archive_backup,$archive_dir) if $moved_archive;
+        rmdir($backup_root);
+        return (0,"SSL removal was rolled back because OpenLiteSpeed could not validate/restart.\n$out");
+    }
+
+    system('/bin/rm','-rf',$backup_root);
+    return (1,'');
+}
+
 if ($in{'action'} eq 'selfsigned') {
     my $days = 3650;
     my $key_size = 2048;
@@ -267,7 +306,6 @@ if ($in{'action'} eq 'selfsigned') {
         my ($e1,$o1)=run_cmd('openssl genrsa -out '.shell_quote($key).' '.$key_size);
         my ($e2,$o2)=run_cmd('openssl req -new -x509 -sha256 -key '.shell_quote($key).' -out '.shell_quote($crt).' -days '.$days.' -config '.shell_quote($cnf));
         if ($e1==0 && $e2==0) {
-            my $archive_dir2=$archive_dir; my $live_dir2=$live_dir;
             if (system('/bin/cp','-f',$key,"$archive_dir/privkey${version}.pem")==0 &&
                 system('/bin/cp','-f',$crt,"$archive_dir/cert${version}.pem")==0 &&
                 system('/bin/cp','-f',$crt,"$archive_dir/chain${version}.pem")==0 &&
@@ -328,6 +366,15 @@ if ($in{'action'} eq 'custom_install') {
     }
 }
 
+if ($in{'action'} eq 'remove_ssl') {
+    my ($ok,$out)=remove_lineage();
+    if ($ok) {
+        $message='Installed SSL certificate lineage was removed successfully and OpenLiteSpeed restarted.';
+    } else {
+        $error=$out;
+    }
+}
+
 if ($in{'action'} eq 'letsencrypt_issue' || $in{'action'} eq 'renew') {
     my $email = $in{'email'} || '';
     my @domains = domains_for_vh();
@@ -369,7 +416,7 @@ my $default_type=($type eq "Let's Encrypt") ? 'letsencrypt' : 'selfsigned';
 
 print <<'HTML';
 <style>
-.ols-ssl{max-width:1050px;margin:0 auto}.ols-ssl-hero{padding:28px 30px;border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:14px;margin-bottom:18px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:32px;align-items:center}.ols-ssl-hero-main{min-width:0}.ols-ssl-hero-deps{min-width:260px;padding-left:28px;border-left:1px solid var(--border-color,rgba(128,128,128,.18))}.ols-ssl-hero-deps-title{font-size:12px;font-weight:700;margin-bottom:8px}.ols-ssl-hero-deps-list{margin-bottom:10px}.ols-deps-item{display:flex;align-items:center;gap:8px;font-size:12px;margin:5px 0}.ols-deps-dot{width:7px;height:7px;border-radius:50%;background:#39a866;display:inline-block}.ols-deps-item.off{opacity:.72}.ols-deps-item.off .ols-deps-dot{background:#888}.ols-kicker{font-size:11px;text-transform:uppercase;letter-spacing:.08em;opacity:.55;font-weight:700}.ols-ssl h1{margin:6px 0;font-size:29px}.ols-muted{opacity:.62;font-size:13px}.ols-card{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:12px;margin-bottom:16px;overflow:hidden}.ols-card h2{font-size:16px;margin:0;padding:16px 20px;border-bottom:1px solid var(--border-color,rgba(128,128,128,.16))}.ols-body{padding:18px 20px}.ols-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--border-color,rgba(128,128,128,.18));border:1px solid var(--border-color,rgba(128,128,128,.18));border-radius:9px;overflow:hidden}.ols-grid>div{padding:13px 15px;background:var(--body-bg,transparent);min-width:0}.ols-label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.06em;opacity:.52;margin-bottom:5px}.ols-value{font-size:13px;font-weight:600;word-break:break-word}.ols-badge{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(40,167,69,.13);color:#39a866;font-size:11px;font-weight:700}.ols-badge.off{background:rgba(128,128,128,.12);color:#888}.ols-actions{display:flex;gap:10px;flex-wrap:wrap}.ols-btn{display:inline-block;padding:10px 15px;border-radius:8px;text-decoration:none;border:1px solid var(--border-color,rgba(128,128,128,.25));font-weight:700;font-size:12px;color:inherit;background:transparent;cursor:pointer}.ols-btn:hover{background:rgba(128,128,128,.09)}.ols-btn.primary{background:#3584e4;color:#fff;border-color:#3584e4}.ols-btn.primary:hover{background:#2f75c7;border-color:#2f75c7}.ols-type-box{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:10px;padding:14px}.ols-radio-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.ols-radio-option{display:block;border:1px solid var(--border-color,rgba(128,128,128,.25));border-radius:9px;padding:12px;cursor:pointer}.ols-radio-option:hover{background:rgba(128,128,128,.06)}.ols-radio-option input[type="radio"]{appearance:none!important;-webkit-appearance:none!important;width:18px!important;height:18px!important;margin:0 10px 0 0!important;padding:0!important;border:2px solid currentColor!important;border-radius:50%!important;background:transparent!important;opacity:1!important;position:static!important;pointer-events:auto!important;vertical-align:middle!important;display:inline-block!important;box-sizing:border-box!important}.ols-radio-option input[type="radio"]:checked{border-color:#3584e4!important;background:radial-gradient(circle,#3584e4 0 4px,transparent 5px)!important}.ols-radio-option strong{display:inline-block;font-size:13px;vertical-align:middle}.ols-radio-option span{display:block;margin:6px 0 0;font-size:11px;line-height:1.4;opacity:.62}.ols-cert-panel{margin-top:14px}.ols-form{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:end}.ols-field label{display:block;font-size:11px;font-weight:700;margin-bottom:6px;opacity:.7}.ols-field input{width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border-color,rgba(128,128,128,.28));border-radius:8px;background:transparent;color:inherit}.ols-field textarea{width:100%;box-sizing:border-box;min-height:180px;padding:10px;border:1px solid var(--border-color,rgba(128,128,128,.28));border-radius:8px;background:#111827;color:#e5e7eb;font:12px/1.45 monospace}.ols-custom-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.ols-custom-full{grid-column:1/-1}.ols-note{font-size:12px;opacity:.62}.ols-message{padding:13px 15px;border-radius:9px;margin-bottom:16px;white-space:pre-wrap}.ols-success{background:rgba(40,167,69,.1);border:1px solid rgba(40,167,69,.25)}.ols-error{background:rgba(220,53,69,.1);border:1px solid rgba(220,53,69,.25)}
+.ols-ssl{max-width:1050px;margin:0 auto}.ols-ssl-hero{padding:28px 30px;border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:14px;margin-bottom:18px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:32px;align-items:center}.ols-ssl-hero-main{min-width:0}.ols-ssl-hero-deps{min-width:260px;padding-left:28px;border-left:1px solid var(--border-color,rgba(128,128,128,.18))}.ols-ssl-hero-deps-title{font-size:12px;font-weight:700;margin-bottom:8px}.ols-ssl-hero-deps-list{margin-bottom:10px}.ols-deps-item{display:flex;align-items:center;gap:8px;font-size:12px;margin:5px 0}.ols-deps-dot{width:7px;height:7px;border-radius:50%;background:#39a866;display:inline-block}.ols-deps-item.off{opacity:.72}.ols-deps-item.off .ols-deps-dot{background:#888}.ols-kicker{font-size:11px;text-transform:uppercase;letter-spacing:.08em;opacity:.55;font-weight:700}.ols-ssl h1{margin:6px 0;font-size:29px}.ols-muted{opacity:.62;font-size:13px}.ols-card{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:12px;margin-bottom:16px;overflow:hidden}.ols-card h2{font-size:16px;margin:0;padding:16px 20px;border-bottom:1px solid var(--border-color,rgba(128,128,128,.16))}.ols-body{padding:18px 20px}.ols-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--border-color,rgba(128,128,128,.18));border:1px solid var(--border-color,rgba(128,128,128,.18));border-radius:9px;overflow:hidden}.ols-grid>div{padding:13px 15px;background:var(--body-bg,transparent);min-width:0}.ols-label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.06em;opacity:.52;margin-bottom:5px}.ols-value{font-size:13px;font-weight:600;word-break:break-word}.ols-badge{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(40,167,69,.13);color:#39a866;font-size:11px;font-weight:700}.ols-badge.off{background:rgba(128,128,128,.12);color:#888}.ols-actions{display:flex;gap:10px;flex-wrap:wrap}.ols-btn{display:inline-block;padding:10px 15px;border-radius:8px;text-decoration:none;border:1px solid var(--border-color,rgba(128,128,128,.25));font-weight:700;font-size:12px;color:inherit;background:transparent;cursor:pointer}.ols-btn:hover{background:rgba(128,128,128,.09)}.ols-btn.primary{background:#3584e4;color:#fff;border-color:#3584e4}.ols-btn.primary:hover{background:#2f75c7;border-color:#2f75c7}.ols-btn.danger{color:#d9534f;border-color:rgba(217,83,79,.35)}.ols-btn.danger:hover{background:rgba(217,83,79,.08)}.ols-type-box{border:1px solid var(--border-color,rgba(128,128,128,.22));border-radius:10px;padding:14px}.ols-radio-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.ols-radio-option{display:block;border:1px solid var(--border-color,rgba(128,128,128,.25));border-radius:9px;padding:12px;cursor:pointer}.ols-radio-option:hover{background:rgba(128,128,128,.06)}.ols-radio-option input[type="radio"]{appearance:none!important;-webkit-appearance:none!important;width:18px!important;height:18px!important;margin:0 10px 0 0!important;padding:0!important;border:2px solid currentColor!important;border-radius:50%!important;background:transparent!important;opacity:1!important;position:static!important;pointer-events:auto!important;vertical-align:middle!important;display:inline-block!important;box-sizing:border-box!important}.ols-radio-option input[type="radio"]:checked{border-color:#3584e4!important;background:radial-gradient(circle,#3584e4 0 4px,transparent 5px)!important}.ols-radio-option strong{display:inline-block;font-size:13px;vertical-align:middle}.ols-radio-option span{display:block;margin:6px 0 0;font-size:11px;line-height:1.4;opacity:.62}.ols-cert-panel{margin-top:14px}.ols-form{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:end}.ols-field label{display:block;font-size:11px;font-weight:700;margin-bottom:6px;opacity:.7}.ols-field input{width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border-color,rgba(128,128,128,.28));border-radius:8px;background:transparent;color:inherit}.ols-field textarea{width:100%;box-sizing:border-box;min-height:180px;padding:10px;border:1px solid var(--border-color,rgba(128,128,128,.28));border-radius:8px;background:#111827;color:#e5e7eb;font:12px/1.45 monospace}.ols-custom-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.ols-custom-full{grid-column:1/-1}.ols-note{font-size:12px;opacity:.62}.ols-message{padding:13px 15px;border-radius:9px;margin-bottom:16px;white-space:pre-wrap}.ols-success{background:rgba(40,167,69,.1);border:1px solid rgba(40,167,69,.25)}.ols-error{background:rgba(220,53,69,.1);border:1px solid rgba(220,53,69,.25)}
 @media(max-width:800px){.ols-ssl-hero{grid-template-columns:1fr;gap:18px}.ols-ssl-hero-deps{min-width:0;padding-left:0;padding-top:18px;border-left:0;border-top:1px solid var(--border-color,rgba(128,128,128,.18))}.ols-grid,.ols-radio-grid,.ols-custom-grid,.ols-form{grid-template-columns:1fr}.ols-custom-full{grid-column:auto}}
 </style>
 HTML
@@ -387,6 +434,8 @@ print "<div><span class='ols-label'>Valid From</span><span class='ols-value'>".&
 print "<div><span class='ols-label'>Expires</span><span class='ols-value'>".&html_escape($info{'to'}||'—')."</span></div>";
 print "<div><span class='ols-label'>Certificate</span><span class='ols-value'><code>".&html_escape($fullchain)."</code></span></div>";
 print "<div><span class='ols-label'>Private Key</span><span class='ols-value'><code>".&html_escape($privkey)."</code></span></div>";
+print "</div><div class='ols-actions' style='margin-top:14px'>";
+if ($exists) { print "<form method='post' action='ssl.cgi' onsubmit=\"return confirm('Remove the installed SSL certificate and its archive/live lineage for this virtual host?')\"><input type='hidden' name='vh' value='".&quote_escape($vh)."'><input type='hidden' name='action' value='remove_ssl'><button class='ols-btn danger' type='submit'>Remove Installed SSL</button></form>"; }
 print "</div></div></section>";
 
 print "<section class='ols-card'><h2>Certificate Type</h2><div class='ols-body'><form method='post' action='ssl.cgi' id='ssl-cert-form'><input type='hidden' name='vh' value='".&quote_escape($vh)."'><input type='hidden' name='action' id='ssl-action' value='".($default_type eq 'letsencrypt' ? 'letsencrypt_issue' : 'selfsigned')."'><div class='ols-type-box'><div class='ols-radio-grid'>";
