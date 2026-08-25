@@ -88,8 +88,51 @@ sub remove_vhost_block {
 }
 sub normalize_vhost_spacing {
     my ($text)=@_;
-    $text =~ s{(^[ \t]*\}[ \t]*\n)(?:[ \t]*\n)*(?=^[ \t]*virtualhost\s+\S+\s*\{)}{$1\n}gm;
-    return $text;
+    $text =~ s/\r\n/\n/g;
+    my @lines=split(/\n/,$text,-1);
+    my @out;
+    my $in_vhost=0;
+    my $depth=0;
+    my $just_closed_vhost=0;
+    my @pending_blank;
+
+    for my $line (@lines) {
+        if (!$in_vhost && $line =~ /^\s*virtualhost\s+\S+\s*\{/i) {
+            if ($just_closed_vhost) {
+                push @out, '';
+                @pending_blank=();
+                $just_closed_vhost=0;
+            }
+            $in_vhost=1;
+            $depth=0;
+        }
+
+        if ($in_vhost) {
+            push @out,$line;
+            my $opens=()=$line =~ /\{/g;
+            my $closes=()=$line =~ /\}/g;
+            $depth += $opens-$closes;
+            if ($depth<=0) {
+                $in_vhost=0;
+                $just_closed_vhost=1;
+            }
+            next;
+        }
+
+        if ($just_closed_vhost && $line =~ /^\s*$/) {
+            push @pending_blank,$line;
+            next;
+        }
+
+        if ($just_closed_vhost) {
+            push @out,@pending_blank;
+            @pending_blank=();
+            $just_closed_vhost=0;
+        }
+        push @out,$line;
+    }
+
+    return join("\n",@out);
 }
 sub find_lsphp {
     my @paths; if (opendir(my $dh,$config{'lsws'})) { while(my $entry=readdir($dh)) { push @paths,"$config{'lsws'}/$entry/bin/lsphp" if $entry =~ /^lsphp[0-9.]+$/; } closedir($dh); }
@@ -177,7 +220,7 @@ if ($in{'action'} eq 'add') {
             }
             if (!$error) {
                 my $block="\nvirtualhost $domain {\n  vhRoot                  \$SERVER_ROOT/domains/\$VH_NAME/\n  configFile              \$SERVER_ROOT/domains/\$VH_NAME/conf/vhconf.conf\n  allowSymbolLink         1\n  enableScript            1\n  restrained              1\n  maxKeepAliveReq         0\n  setUIDMode              0\n}\n";
-                my $new=add_listener_maps($content.$block,$domain,$aliases); my ($ok,$out)=write_and_apply($content,$new);
+                my $new=add_listener_maps($content.$block,$domain,$aliases); $new=normalize_vhost_spacing($new); my ($ok,$out)=write_and_apply($content,$new);
                 if ($ok) { $message="Domain $domain was added successfully."; } else { unlink($vh_conf); $error=$out; }
             }
         }
