@@ -176,11 +176,11 @@ for my $r (@pkg_rows) {
 }
 print "<div class='ols-actions'>";
 if ($missing) {
-    print "<a class='ols-btn primary' href='ssl-dependencies.cgi?action=install_packages$vh_query'>Install missing</a>";
+    print "<a class='ols-btn primary' href='ssl-dependencies.cgi?action=install_packages$vh_query'>Install</a>";
 }
 if ($installed_count) {
-    print "<a class='ols-btn' href='ssl-dependencies.cgi?action=reinstall_packages$vh_query'>Reinstall installed</a>";
-    print "<a class='ols-btn danger' href='ssl-dependencies.cgi?action=uninstall_packages$vh_query' onclick=\"return confirm('Uninstall OpenSSL and Certbot from this system? Certificate operations will stop working until they are installed again.');\">Uninstall installed</a>";
+    print "<a class='ols-btn' href='ssl-dependencies.cgi?action=reinstall_packages$vh_query'>Reinstall</a>";
+    print "<a class='ols-btn danger' href='ssl-dependencies.cgi?action=uninstall_packages$vh_query' onclick=\"return confirm('Uninstall OpenSSL and Certbot from this system? Certificate operations will stop working until they are installed again.');\">Uninstall</a>";
 }
 print "<a class='ols-btn' href='ssl-dependencies.cgi".($vh?'?vh='.&urlize($vh):'')."'>Refresh status</a>";
 print "</div>";
