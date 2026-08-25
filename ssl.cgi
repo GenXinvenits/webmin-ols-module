@@ -288,7 +288,8 @@ if ($exists) {
 my @domains=domains_for_vh();
 my $domain_text=join(', ',@domains);
 my $certbot_installed=certbot_path() ? 1 : 0;
-my $openssl_installed=run_cmd('command -v openssl') ? 1 : 0;
+my ($openssl_exit,$openssl_output)=run_cmd('command -v openssl');
+my $openssl_installed=($openssl_exit == 0 && $openssl_output =~ /\S/) ? 1 : 0;
 my $default_type = ($type eq "Let's Encrypt") ? 'letsencrypt' : 'selfsigned';
 
 print <<'HTML';
