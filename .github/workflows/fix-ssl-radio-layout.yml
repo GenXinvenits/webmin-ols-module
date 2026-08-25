@@ -1,0 +1,39 @@
+name: Fix SSL provider radio layout
+
+on:
+  push:
+    branches: [alpha]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.head_commit.message != 'Fix SSL provider radio layout [final]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fix radio and heading alignment
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('ssl.cgi')
+          s = p.read_text()
+          old = '.ols-radio-option{display:grid;grid-template-columns:18px 1fr;grid-template-rows:auto auto;column-gap:10px;row-gap:6px;align-items:center;'
+          new = '.ols-radio-option{display:block;'
+          if old not in s:
+              raise SystemExit('radio option CSS not found')
+          s = s.replace(old, new, 1)
+          old = '.ols-radio-option input[type="radio"]{grid-column:1;grid-row:1}.ols-radio-option strong{grid-column:2;grid-row:1;font-size:13px;vertical-align:middle}.ols-radio-option span{grid-column:2;grid-row:2;display:block;margin:0;font-size:11px;line-height:1.4;opacity:.62}'
+          new = '.ols-radio-option input[type="radio"]{display:inline-block !important;margin:0 8px 0 0 !important;vertical-align:middle !important}.ols-radio-option strong{display:inline-block;font-size:13px;vertical-align:middle;margin:0}.ols-radio-option span{display:block;margin:6px 0 0 0;font-size:11px;line-height:1.4;opacity:.62}'
+          if old not in s:
+              raise SystemExit('radio alignment CSS not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          rm -f .github/workflows/fix-ssl-radio-layout.yml
+          git config user.name 'GenXinvenits'
+          git config user.email 'genxinvenits@outlook.com'
+          git add ssl.cgi .github/workflows/fix-ssl-radio-layout.yml
+          git commit -m 'Fix SSL provider radio layout [final]'
+          git push
