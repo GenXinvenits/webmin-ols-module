@@ -236,6 +236,7 @@ elsif ($in{'action'} eq 'remove') {
             if ($ok) {
                 my $vh_root = "$domain_base/$domain";
                 my $vh_conf = "$vh_root/conf/vhconf.conf";
+                my $cert_root = "$config{'lsws'}/cert/$domain";
                 my @cleanup_errors;
 
                 unlink($vh_conf) if -f $vh_conf;
@@ -251,11 +252,22 @@ elsif ($in{'action'} eq 'remove') {
                     push @cleanup_errors, "Unable to remove domain directory $vh_root: $@" if $@;
                 }
 
+                if (-d $cert_root) {
+                    eval {
+                        my $cert_errors;
+                        remove_tree($cert_root, { error => \$cert_errors });
+                        if ($cert_errors && @$cert_errors) {
+                            push @cleanup_errors, "Unable to completely remove SSL certificate directory $cert_root";
+                        }
+                    };
+                    push @cleanup_errors, "Unable to remove SSL certificate directory $cert_root: $@" if $@;
+                }
+
                 if (@cleanup_errors) {
-                    $message = "Domain $domain was removed from OpenLiteSpeed, but its directory could not be completely deleted.";
+                    $message = "Domain $domain was removed from OpenLiteSpeed, but cleanup was incomplete.";
                     $error = join("\n", @cleanup_errors);
                 } else {
-                    $message = "Domain $domain was removed successfully. Its OpenLiteSpeed configuration, listener mappings and domain directory were deleted.";
+                    $message = "Domain $domain was removed successfully. Its OpenLiteSpeed configuration, listener mappings, domain directory and SSL certificate directory were deleted.";
                 }
             } else { $error = $out; }
         } else { $error = 'Unable to locate the virtual host configuration block.'; }
@@ -274,10 +286,10 @@ print "<div class='ols-domains'>";
 print "<div class='ols-notification'>".&html_escape($message)."</div>" if $message;
 print "<div class='ols-error-notification'>".&html_escape($error)."</div>" if $error;
 print "<section class='ols-card ols-add-highlight'><h2>Add Domain</h2><div class='ols-body'><div class='ols-add-intro'><div class='ols-add-icon'>+</div><div class='ols-add-copy'><strong>Register a new website with OpenLiteSpeed</strong><span>Add a domain to OpenLiteSpeed and automatically create its virtual-host configuration, document root and listener mapping. The website files themselves are not changed.</span></div></div><form method='post' action='domains.cgi'><input type='hidden' name='action' value='add'><div class='ols-grid'><div class='ols-field'><label for='ols-domain'>Domain</label><input id='ols-domain' name='domain' type='text' placeholder='example.com' required><span class='ols-field-help'>The primary domain name that will be registered as a new virtual host.</span></div><div class='ols-field'><label for='ols-alias-prefixes'>Aliases / Subdomains</label><div class='ols-alias-input'><input id='ols-alias-prefixes' name='alias_prefixes' type='text' placeholder='xyz,account,community' autocomplete='off'><span class='ols-alias-suffix' id='ols-alias-suffix'>.example.com</span></div><span class='ols-field-help'>Enter prefixes separated by commas, such as xyz,account,community. The domain is added automatically to each prefix. <strong>www</strong> is always added automatically.</span></div></div><div class='ols-actions'><button class='ols-btn' type='submit'>Add Domain</button><a class='ols-btn' href='index.cgi'>Back to Websites</a></div></form></div></section>";
-print "<section class='ols-card'><h2>Registered Domains</h2><div class='ols-body'><p class='ols-note'>Removing a domain unregisters its OpenLiteSpeed configuration and listener mappings. Website files are deleted.</p><div class='ols-list'>";
+print "<section class='ols-card'><h2>Registered Domains</h2><div class='ols-body'><p class='ols-note'>Removing a domain unregisters its OpenLiteSpeed configuration and listener mappings. Website files and any SSL certificate directory for the domain are deleted.</p><div class='ols-list'>";
 print "<div class='ols-row ols-head'><div>Domain</div><div>Virtual Host</div><div>Action</div></div>";
 if (!@domains) { print "<div class='ols-body ols-note'>No domains registered.</div>"; }
-else { for my $d (@domains) { print "<div class='ols-row'><div class='ols-domain'>".&html_escape($d)."</div><div>".&html_escape("$domain_base/$d")."</div><div><form method='post' action='domains.cgi' onsubmit=\"return confirm('Remove $d from OpenLiteSpeed? The domain directory and its files will also be deleted.');\"><input type='hidden' name='action' value='remove'><input type='hidden' name='domain' value='".&quote_escape($d)."'><button class='ols-btn ols-danger' type='submit'>Remove</button></form></div></div>"; } }
+else { for my $d (@domains) { print "<div class='ols-row'><div class='ols-domain'>".&html_escape($d)."</div><div>".&html_escape("$domain_base/$d")."</div><div><form method='post' action='domains.cgi' onsubmit=\"return confirm('Remove $d from OpenLiteSpeed? The domain directory, its files and its SSL certificate directory will also be deleted.');\"><input type='hidden' name='action' value='remove'><input type='hidden' name='domain' value='".&quote_escape($d)."'><button class='ols-btn ols-danger' type='submit'>Remove</button></form></div></div>"; } }
 print "</div></div></section></div>";
 
 print <<'HTML';
