@@ -1,6 +1,6 @@
 docRoot                         $VH_ROOT/public_html
 vhDomain                        $VH_NAME
-__VH_ALIASES_LINE__adminEmails                     admin@$VH_NAME
+__VH_ALIASES_LINE__adminEmails                     admin@__DOMAIN__
 
 enableGzip                      1
 enableIpGeo                     0
