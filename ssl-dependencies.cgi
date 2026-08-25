@@ -115,8 +115,7 @@ for my $r (@pkg_rows) {
     print "<div class='ols-row'><div><div class='ols-name'>".esc($r->[0])."</div><div class='ols-desc'>".esc($desc)."</div></div><div class='".($r->[1]?'ols-ok':'ols-missing')."'>".($r->[1]?'Installed':'Missing')."</div></div>";
 }
 print "</div></section>";
-print "<section class='ols-card'><h2>Let's Encrypt</h2><div class='ols-body'><div class='ols-row'><div><div class='ols-name'>Certbot</div><div class='ols-desc'>The official Let's Encrypt client used by the SSL Certificate Manager for issuance and renewal.</div></div><div class='".(pkg_installed('certbot',$pm)?'ols-ok':'ols-missing')."'>".(pkg_installed('certbot',$pm)?'Ready':'Not installed')."</div></div>";
-print "<p class='ols-muted'>The SSL manager uses the Certbot webroot authenticator. No acme.sh installation or account is required.</p>";
+print "<section class='ols-card'><h2>Let's Encrypt</h2><div class='ols-body'><p class='ols-muted'>Certbot is the official Let's Encrypt client used by the SSL Certificate Manager for certificate issuance and renewal. Its installation status is shown above under System packages.</p>";
 print "<a class='ols-btn primary' href='ssl-dependencies.cgi?action=install_packages".($vh?'&vh='.&urlize($vh):'')."'>Install missing packages</a>" if $missing;
 print "<a class='ols-btn' href='ssl-dependencies.cgi".($vh?'?vh='.&urlize($vh):'')."'>Refresh status</a>";
 print "</div></section>";
