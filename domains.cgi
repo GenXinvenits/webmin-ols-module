@@ -35,7 +35,7 @@ sub write_and_apply {
         return (0, "OpenLiteSpeed failed to restart. The previous configuration was restored.\n$restart");
     }
     my @backups = sort { $b cmp $a } glob("$conf.webmin-*.bak");
-    unlink @backups[2 .. $#backups] if @backups > 2;
+    unlink @backups[1 .. $#backups] if @backups > 1;
     return (1, '');
 }
 
@@ -62,14 +62,10 @@ sub add_listener_maps {
     my ($text,$vh,$aliases)=@_;
     my @maps;
     my %seen;
-
-    # Apex domains get only their www alias. A subdomain vhost needs a
-    # self-map because it has no automatic www alias.
     if ($vh =~ /^[^.]+\.[^.]+\.[^.]+$/) {
         push @maps, "    map $vh $vh\n";
         $seen{lc($vh)} = 1;
     }
-
     for my $alias (split(/\s+/,$aliases || '')) {
         next unless $alias;
         next if lc($alias) eq lc($vh);
@@ -115,7 +111,7 @@ extprocessor www-data {
   env                           LSAPI_CHILDREN=2
   env                           LSAPI_AVOID_FORK=200M
   env                           LSAPI_MAX_IDLE=30
-  initTimeout                  30
+  initTimeout                   30
   retryTimeout                  0
   persistConn                   1
   pcKeepAliveTimeout            2
@@ -158,7 +154,7 @@ if ($in{'action'} eq 'add') {
             my $vh_config=build_vhconf($domain,$aliases,$alias_prefixes); if (!$vh_config) { $error='Unable to build the virtual host configuration from the module template.'; }
             else { my $fh; if (!open($fh,'>',$vh_conf)) { $error="Unable to create $vh_conf: $!"; } else { print $fh $vh_config; close($fh); } }
             if (!$error) {
-                my $block="\nvirtualhost $domain {\n    vhRoot $vh_root/\n    configFile $vh_conf\n    allowSymbolLink 1\n    enableScript 1\n    restrained 1\n}\n";
+                my $block="\nvirtualhost $domain {\n  vhRoot                  \$SERVER_ROOT/domains/\$VH_NAME/\n  configFile              \$SERVER_ROOT/domains/\$VH_NAME/conf/vhconf.conf\n  allowSymbolLink         1\n  enableScript            1\n  restrained              1\n  maxKeepAliveReq         0\n  setUIDMode              0\n}\n";
                 my $new=add_listener_maps($content.$block,$domain,$aliases); my ($ok,$out)=write_and_apply($content,$new);
                 if ($ok) { $message="Domain $domain was added successfully."; } else { unlink($vh_conf); $error=$out; }
             }
