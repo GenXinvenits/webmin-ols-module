@@ -147,7 +147,7 @@ if ($in{'action'} eq 'add') {
         $aliases=build_aliases($domain,$alias_prefixes); my $vh_root="$domain_base/$domain"; my $vh_conf="$vh_root/conf/vhconf.conf"; my $public_html="$vh_root/public_html";
         my $paths_ok=eval {
             make_path("$vh_root/conf",$public_html,"$vh_root/logs","$vh_root/cgi-bin","$public_html/.well-known/acme-challenge","$vh_root/cachedata");
-            system('/bin/chown','root:nogroup',$vh_root)==0 or die "Unable to set domain root ownership: $!"; system('/bin/chmod','755',$vh_root)==0 or die "Unable to set domain root permissions: $!";
+            system('/bin/chown','www-data:www-data',$vh_root)==0 or die "Unable to set domain root ownership: $!"; system('/bin/chmod','755',$vh_root)==0 or die "Unable to set domain root permissions: $!";
             for my $path ($public_html,"$vh_root/cgi-bin","$vh_root/cachedata") { system('/bin/chown','-R','www-data:www-data',$path)==0 or die "Unable to set ownership for $path: $!"; system('/bin/chmod','-R','755',$path)==0 or die "Unable to set permissions for $path: $!"; }
             system('/bin/chown','-R','lsadm:nogroup',"$vh_root/conf")==0 or die "Unable to set configuration ownership: $!"; system('/bin/chmod','-R','755',"$vh_root/conf")==0 or die "Unable to set configuration permissions: $!";
             system('/bin/chown','-R','root:nogroup',"$vh_root/logs")==0 or die "Unable to set log ownership: $!"; system('/bin/chmod','-R','750',"$vh_root/logs")==0 or die "Unable to set log permissions: $!";
